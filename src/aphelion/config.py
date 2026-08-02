@@ -78,6 +78,21 @@ CHUNK_SOLAPE = 0.15
 MIN_TOKENS_FRAGMENTO = 10  # por debajo son restos de tabla, no contenido
 MAX_PALABRAS_FRAGMENTO = 250  # límite de la especificación, §9.2
 
+# La §9.2.1 admite dividir un fragmento largo en sub-fragmentos, cada uno con su
+# propio rango. El argumento a favor era que truncar descarta evidencia: el 76,5%
+# de los fragmentos excede las 250 palabras.
+#
+# Medido, el argumento no se sostiene. Subdividir **reduce** el texto entregado
+# de 104k a 84k palabras por corrida y la cobertura de 10 fragmentos distintos a
+# 6, porque las colas cortas —la segunda pieza de un fragmento de 321 palabras
+# son 71— ocupan un rango entero con poco contenido, mientras que truncar deja
+# las diez posiciones con 250 palabras cada una.
+#
+# Queda implementado y desactivado: si el ground truth muestra que la cola de un
+# fragmento bien posicionado vale más que un fragmento nuevo peor posicionado, se
+# activa desde el barrido. Hasta entonces manda lo medido.
+SUBDIVIDIR_FRAGMENTOS = False
+
 # Tope de fragmentos por documento tabular. Medido: 30 archivos CSV/XLSX aportan
 # 91.412 de los 149.571 fragmentos (61% del índice), y tres exportaciones
 # bibliográficas de PubMed solas ocupan el 51,5%. Son listados de referencias

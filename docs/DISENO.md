@@ -350,15 +350,36 @@ CombSUM normalizado debe compararse contra RRF en lugar de asumirlo. El valor
 `k₀ = 60` proviene de corpus a escala TREC; para colecciones menores se recomienda
 entre 10 y 20, así que también entra al barrido.
 
-**Oportunidad no explotada: las cabezas sparse de BGE-M3.** El modelo produce
+**Oportunidad pendiente de medir: la cabeza sparse de BGE-M3.** El modelo produce
 representaciones densas, sparse y multi-vector en una sola pasada. En MIRACL, la
-cabeza densa sola rinde 67,8 y **la combinación de las tres alcanza 70,0**. El
-diseño ya invocaba esa capacidad como justificación para elegir BGE-M3
-—«sensibilidad léxica sin índice adicional»— pero el código solo usa la salida
-densa: la ventaja está enunciada y no implementada. Recuperarla no viola la §4.2,
-porque ninguna de las tres cabezas es un decoder, y aporta exactamente lo que este
-corpus necesita: las consultas están llenas de siglas y nombres propios (NBQR,
-ASAT, Chocó, Arauca) que la similitud densa diluye.
+cabeza densa sola rinde 67,8 y la combinación de las tres alcanza **70,0**. Usar
+las tres no viola la §4.2: ninguna es un decoder.
+
+El matiz que impide adoptarla a ciegas: **la recuperación sparse rinde peor
+justamente en cross-lingual**, donde el solapamiento de vocabulario entre consulta
+y documento es mínimo — que es la situación dominante de este corpus, con 130.090
+fragmentos en inglés frente a consultas en español. En cambio destaca en
+documentos largos, donde las palabras clave discriminan mejor que la similitud
+densa. Cabe esperar que ayude en las siglas y topónimos que sí cruzan idiomas
+(NBQR, ASAT, Chocó, Arauca) y estorbe en el resto. Sin ground truth no se puede
+saber cuál efecto domina, así que entra al barrido, no al diseño.
+
+Receta de implementación, ya verificada contra la documentación del modelo:
+
+1. Los pesos están en `sparse_linear.pt` del repositorio `BAAI/bge-m3`: una
+   `Linear(1024 → 1)`, aparte del backbone. No es la cabeza `MaskedLM` que usa
+   SPLADE, de ahí que las implementaciones que asumen SPLADE fallen buscando
+   `lm_head.decoder`.
+2. Peso por token: `w = ReLU(sparse_linear(last_hidden_state))`.
+3. Descartar tokens especiales (`CLS`, `SEP`, `PAD`, `UNK`) y pesos ≤ 0.
+4. Si un mismo token aparece varias veces, conservar **solo su peso máximo**.
+5. Puntuación léxica entre consulta y pasaje: `s_lex = Σ_{t ∈ q∩p} w_qt · w_pt`.
+6. Fusión sugerida por los autores para las tres cabezas: `[0.4, 0.2, 0.4]`
+   (densa, sparse, ColBERT).
+
+El coste de almacenamiento es moderado —solo se guardan los tokens presentes en
+cada texto— frente a ColBERT, que multiplica el índice por más de diez y queda
+descartado por volumen.
 
 ### Codificación en hardware AMD
 

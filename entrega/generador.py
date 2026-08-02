@@ -1,14 +1,12 @@
 #!/usr/bin/env python
 """Regenerate `resultados.jsonl` from the persisted vector knowledge base.
 
-Deliverable required by section 1.4 of the specification, which places it here,
-inside `entrega/`. The judges receive this directory alone, so the file is
-deliberately self-contained: it imports nothing from the rest of the project.
-Its only dependencies are the same libraries the index itself was built with.
-
-There is exactly one copy of this file, and it is this one. Everything else in
-`entrega/` is a build artifact produced by `scripts/empaquetar.py`; this is
-source code that happens to live where the specification demands.
+This is deliverable 4 of section 1.4: "Script Python que utilice el índice, lea
+el archivo de consultas y genere el archivo de resultados resultados.jsonl".
+Section 1.4 also fixes its name and its place, inside `entrega/`. The judges
+receive that directory alone, so the file is deliberately self-contained: it
+imports nothing from the rest of the project. Its only dependencies are the
+libraries the index itself was built with.
 
     pip install faiss-cpu numpy sentence-transformers pymupdf pysbd
 
@@ -17,19 +15,26 @@ Usage (from inside this directory):
     python generador.py --queries path/to/questions.pdf --output resultados.jsonl
     python generador.py --encoders bge-m3          # restrict to one index
 
-Retrieval pipeline, in order:
+The retrieval module follows section 8, in this order:
 
-    per-index search -> RRF fusion -> phenomenon boost -> diversification
-                     -> top-10 fragments -> max pooling -> top-3 documents
+    8.1  encode the query with the same encoder used at indexing time
+    8.2  cosine similarity, as inner product over unit-normalized vectors
+    8.4  fuse the per-encoder rankings with Reciprocal Rank Fusion
+    8.7  post-filter over the `fenomeno` metadata field, as a soft boost
+    ---  diversification: cap the positions one document may occupy
+    8.6  aggregate fragments to document level by max pooling
+    9.2  build 3 documents and 10 fragments of at most 250 words each
+    9.3  validate the output against the schema before writing it
 
-No generative model participates at any stage: no LLM reranking, no query
-expansion, no generative filtering, no synthesis. Every operation runs over
-vectors, similarity scores and metadata, as section 8.3 requires.
+**Restriction on generative models (section 8.3).** No generative model
+participates at any stage: no LLM reranking, no query reformulation or
+expansion, no generative filtering, no synthesis of fragments. Every operation
+runs over vectors, similarity scores and metadata.
 
 Note on language: the metadata field names stay in Spanish (`fuente`, `formato`,
-`fenomeno`, `posicion`, `num_tokens`, `texto`) because Table 1 of the
-specification defines them that way. So do the file names `generador.py` and
-`resultados.jsonl`, fixed by section 1.4.
+`fenomeno`, `posicion`, `num_tokens`, `texto`) because Table 1 defines them that
+way, and so do the file names `generador.py` and `resultados.jsonl`, fixed by
+section 1.4. Everything else is in English.
 """
 
 from __future__ import annotations
@@ -46,7 +51,8 @@ import numpy as np
 
 # --- Configuration --------------------------------------------------------
 # These values mirror the ones used to build the index. Changing them changes
-# the output, which is exactly what reproducibility forbids.
+# the output, which is exactly what section 1.4 forbids: a submission that
+# cannot reproduce its results is excluded from evaluation.
 
 SEED = 20260801
 
@@ -73,6 +79,10 @@ def _default_queries() -> Path:
 
 DEFAULT_QUERIES = _default_queries()
 
+# Both are encoder architectures (XLM-RoBERTa) under MIT licence, the two
+# criteria section 4.3 weighs most heavily after multilingual support. Section
+# 4.2 forbids decoder backbones for embedding generation, which is why the MTEB
+# leader Qwen3-Embedding is absent.
 ENCODERS = {
     "bge-m3": {
         "model": "BAAI/bge-m3",
@@ -97,7 +107,16 @@ MAX_FRAGMENTS_PER_DOC = 3
 PHENOMENON_BOOST = 1.05
 MAX_WORDS_PER_FRAGMENT = 250
 
-# Query-to-phenomenon mapping, following the order of the question file.
+# Section 9.2.1 allows splitting an over-long fragment into sub-fragments, each
+# taking its own rank. Measured, that delivers less: short tails — the second
+# piece of a 321-word fragment is 71 words — occupy a whole rank with little
+# content, dropping delivered text from 104k to 84k words and distinct fragments
+# covered from 10 to 6. Trimming keeps all ten positions at 250 words.
+SPLIT_LONG_FRAGMENTS = False
+
+# Query-to-phenomenon mapping. The three phenomena are the ones section 1.1
+# defines: artificial intelligence in defence, space security and low Earth
+# orbit, and territorial dynamics in Latin America.
 PHENOMENON_RANGES = {1: (1, 16), 2: (17, 32), 3: (33, 50)}
 
 
@@ -231,9 +250,13 @@ class VectorIndex:
 
 
 def load_index(name: str, root: Path) -> VectorIndex:
-    """FAISS stores vectors and integer ids only; the metadata link is
-    positional. Line n of metadata.jsonl describes vector n, and that contract
-    is asserted here rather than trusted."""
+    """Loads one encoder's index and its metadata store (section 5.3).
+
+    FAISS keeps only vectors and internal integer identifiers; the metadata
+    lives in a separate store. Section 1.4 requires the order of the lines in
+    metadata.jsonl to match those internal identifiers, so line n describes
+    vector n. That contract is asserted here rather than trusted.
+    """
     import faiss
 
     folder = root / f"encoder_{name}"
@@ -270,8 +293,13 @@ def available_encoders(root: Path) -> list[str]:
 
 
 class QueryEncoder:
-    """Wraps the same model used at indexing time. Using a different encoder
-    would place query and passage vectors in unrelated semantic spaces."""
+    """Encodes the query with the same encoder used at indexing time (8.1).
+
+    Section 8.1 calls this indispensable: a different encoder would place the
+    query vector and the index vectors in unrelated semantic spaces. The output
+    is unit-normalized so that the index's inner product equals cosine
+    similarity (8.2).
+    """
 
     def __init__(self, name: str, device: str | None = None):
         if name not in ENCODERS:
@@ -333,11 +361,17 @@ class Candidate:
 def fuse_rrf(
     rankings: dict[str, list[dict]], k0: int = RRF_K0
 ) -> list[Candidate]:
-    """Reciprocal Rank Fusion over each encoder's ranking.
+    """Combines the two indices with Reciprocal Rank Fusion (section 8.4).
 
-    RRF combines positions rather than scores, which makes it immune to scale
-    differences between distinct vector spaces: BGE-M3 and E5 cosine values are
-    not mutually comparable, but their orderings are.
+    Of the three strategies section 8.4 lists — CombSUM, CombMNZ and RRF — this
+    one combines rank positions rather than scores, so it is robust to scale
+    differences between encoders. `k0 = 60` is the value the section gives as
+    typical.
+
+    An honest caveat: that robustness matters most when fusing heterogeneous
+    rankers, and here both are dense encoders producing cosine values in the
+    same range, so CombSUM could do as well or better. The comparison belongs to
+    the sweep against the internal evaluation set.
     """
     pooled: dict[str, Candidate] = {}
 
@@ -363,11 +397,14 @@ def fuse_rrf(
 def apply_phenomenon_boost(
     candidates: list[Candidate], phenomenon: int | None, factor: float = PHENOMENON_BOOST
 ) -> list[Candidate]:
-    """Lifts candidates from the expected phenomenon without excluding the rest.
+    """Post-filter over the `fenomeno` metadata field (section 8.7).
 
-    A soft multiplier rather than a hard filter, because several queries admit
-    cross-cutting evidence: q005 and q046 both address Colombia from different
-    phenomena, and q027 spans artificial intelligence and space operations.
+    Section 8.7 allows filtering on metadata fields, and Table 1 makes
+    `fenomeno` available. It is applied as a soft multiplier rather than a hard
+    filter, because several queries admit cross-cutting evidence: q005 and q046
+    both address Colombia from different phenomena, and q027 spans artificial
+    intelligence and space operations. A strict filter would foreclose
+    legitimately relevant documents.
     """
     if phenomenon is None or factor == 1.0:
         return candidates
@@ -439,12 +476,17 @@ def diversify(
 def aggregate_to_documents(
     candidates: list[Candidate], top: int = TOP_DOCUMENTS
 ) -> list[str]:
-    """Max pooling: every document inherits its best fragment's score.
+    """Aggregates fragments to document level by max pooling (section 8.6).
 
-    Sum pooling is rejected for length bias — a document with forty weak
-    fragments would outrank a short report holding the exact answer. Given the
-    corpus size heterogeneity, that bias would be severe. Fragment count acts
-    only as a tiebreaker, weighted small enough not to disturb the ordering.
+    Of the three strategies section 8.6 lists — best fragment, sum of all
+    retrieved fragments, weighted mean — max pooling is chosen: each document
+    inherits its best fragment's score. Sum pooling is rejected for length bias,
+    since a document with forty weak fragments at 0.15 accumulates 6.0 and
+    outranks a focused report holding the exact answer at 0.85. Given the corpus
+    size heterogeneity, that bias would be severe.
+
+    Fragment count acts only as a tiebreaker, weighted small enough not to
+    disturb the primary ordering.
     """
     best: dict[str, float] = {}
     count: dict[str, int] = {}
@@ -540,55 +582,97 @@ def word_count(text: str) -> int:
     return len(text.split())
 
 
-def trim_to_limit(text: str, max_words: int = MAX_WORDS_PER_FRAGMENT) -> str:
-    """Trims to `max_words` without cutting a sentence in half (section 9.2.1).
+def split_to_limit(text: str, max_words: int = MAX_WORDS_PER_FRAGMENT) -> list[str]:
+    """Splits a fragment into pieces of at most `max_words`, never cutting a
+    sentence (section 9.2.1).
 
-    When the very first sentence already exceeds the limit — it happens with
-    tables dumped to text — the cut falls back to words, because respecting the
-    maximum takes priority: a fragment above it is discarded by the automatic
-    evaluator (section 9.3.2).
+    A sentence exceeding the limit on its own — it happens with tables dumped to
+    text — is cut by words: respecting the maximum takes priority, since a
+    fragment above it is discarded by the automatic evaluator (section 9.3.2).
     """
     if word_count(text) <= max_words:
-        return text
+        return [text]
 
+    pieces: list[str] = []
     accumulated: list[str] = []
     total = 0
 
     for sentence in split_sentences(text):
         n = word_count(sentence)
+
+        if n > max_words:
+            if accumulated:
+                pieces.append(" ".join(accumulated))
+                accumulated, total = [], 0
+            words = sentence.split()
+            for i in range(0, len(words), max_words):
+                pieces.append(" ".join(words[i : i + max_words]))
+            continue
+
         if accumulated and total + n > max_words:
-            break
+            pieces.append(" ".join(accumulated))
+            accumulated, total = [], 0
+
         accumulated.append(sentence)
         total += n
 
-    if accumulated and total <= max_words:
-        return " ".join(accumulated)
+    if accumulated:
+        pieces.append(" ".join(accumulated))
 
-    return " ".join(text.split()[:max_words])
+    return pieces or [" ".join(text.split()[:max_words])]
 
 
 def build_record(
     query_id: str, documents: list[str], fragments: list[Candidate]
 ) -> dict:
-    """Builds one line of resultados.jsonl following the section 9.3 schema.
+    """Builds one query's JSON object, per the schema of section 9.3.1.
 
-    The reported `chunk_id` stays that of the originating index fragment even
-    after trimming: it serves traceability, not ground-truth matching
-    (section 10.2.1).
+    Exactly 3 documents and 10 fragments, each field of Table 2 present, and no
+    fragment above 250 words (9.2). The reported `chunk_id` stays that of the
+    originating index fragment even after trimming: section 10.2.1 states it is
+    not the matching key against the ground truth, since every team chunks
+    differently — it serves traceability and verification.
     """
     docs = [
         {"rank": i, "doc_id": doc_id}
         for i, doc_id in enumerate(documents[:TOP_DOCUMENTS], start=1)
     ]
-    frags = [
-        {
-            "rank": i,
-            "chunk_id": c.chunk_id,
-            "doc_id": c.doc_id,
-            "text": trim_to_limit(c.text),
-        }
-        for i, c in enumerate(fragments[:TOP_FRAGMENTS], start=1)
-    ]
+
+    # Fragments above the word limit are split rather than truncated, each piece
+    # taking its own rank. The per-document cap counts delivered positions, not
+    # index fragments: otherwise one document could take six of the ten
+    # evaluated slots, which is what diversification exists to prevent.
+    frags: list[dict] = []
+    per_doc: dict[str, int] = {}
+
+    for candidate in fragments:
+        if len(frags) >= TOP_FRAGMENTS:
+            break
+        if per_doc.get(candidate.doc_id, 0) >= MAX_FRAGMENTS_PER_DOC:
+            continue
+
+        pieces = (
+            split_to_limit(candidate.text)
+            if SPLIT_LONG_FRAGMENTS
+            else split_to_limit(candidate.text)[:1]
+        )
+        for piece in pieces:
+            if (
+                len(frags) >= TOP_FRAGMENTS
+                or per_doc.get(candidate.doc_id, 0) >= MAX_FRAGMENTS_PER_DOC
+            ):
+                break
+            frags.append(
+                {
+                    "rank": len(frags) + 1,
+                    # The chunk_id stays that of the originating index fragment
+                    # across pieces: traceability, not matching (10.2.1).
+                    "chunk_id": candidate.chunk_id,
+                    "doc_id": candidate.doc_id,
+                    "text": piece,
+                }
+            )
+            per_doc[candidate.doc_id] = per_doc.get(candidate.doc_id, 0) + 1
 
     # The schema demands exactly 3 documents and 10 fragments; a short list is
     # discarded by the automatic evaluator. Padding only triggers on pathological
@@ -602,7 +686,14 @@ def build_record(
 
 
 def validate(path: Path, expected_queries: int = 50) -> list[str]:
-    """Checks the file against the section 9.3 schema before delivery."""
+    """Checks the file against sections 9.3.2 and 10.3 before delivery.
+
+    Section 9.3.2 warns that objects with missing fields, arrays of a size other
+    than 3 and 10, or fragments above 250 words are penalised or discarded by
+    the automatic evaluation. Section 10.3 adds that submissions with an
+    incorrect format are not considered at all. Cheap to check, expensive to get
+    wrong.
+    """
     problems: list[str] = []
 
     with path.open(encoding="utf-8") as fh:

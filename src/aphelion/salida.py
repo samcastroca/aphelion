@@ -61,25 +61,93 @@ def recortar_a_limite(
     return " ".join(texto.split()[:max_palabras])
 
 
+def subdividir(
+    texto: str,
+    idioma: str = "es",
+    max_palabras: int = config.MAX_PALABRAS_FRAGMENTO,
+) -> list[str]:
+    """Parte un fragmento en piezas de como máximo `max_palabras`, sin cortar
+    oraciones (§9.2.1).
+
+    Una oración que por sí sola excede el límite —ocurre con tablas volcadas a
+    texto— se corta por palabras: respetar el máximo tiene prioridad, porque un
+    fragmento que lo supera es descartado por el evaluador automático (§9.3.2).
+    """
+    if contar_palabras(texto) <= max_palabras:
+        return [texto]
+
+    piezas: list[str] = []
+    actual: list[str] = []
+    total = 0
+
+    for oracion in dividir_en_oraciones(texto, idioma):
+        n = contar_palabras(oracion)
+
+        if n > max_palabras:
+            if actual:
+                piezas.append(" ".join(actual))
+                actual, total = [], 0
+            palabras = oracion.split()
+            for i in range(0, len(palabras), max_palabras):
+                piezas.append(" ".join(palabras[i : i + max_palabras]))
+            continue
+
+        if actual and total + n > max_palabras:
+            piezas.append(" ".join(actual))
+            actual, total = [], 0
+
+        actual.append(oracion)
+        total += n
+
+    if actual:
+        piezas.append(" ".join(actual))
+
+    return piezas or [" ".join(texto.split()[:max_palabras])]
+
+
 def construir_fragmentos(
     candidatos: list[Candidato],
     top: int = config.TOP_FRAGMENTOS,
     max_palabras: int = config.MAX_PALABRAS_FRAGMENTO,
+    subdividir_largos: bool = config.SUBDIVIDIR_FRAGMENTOS,
+    max_por_doc: int = config.MAX_FRAGMENTOS_POR_DOC,
 ) -> list[dict]:
-    """Convierte candidatos en los objetos de fragmento del esquema de salida."""
+    """Convierte candidatos en los objetos de fragmento del esquema de salida.
+
+    Cuando se subdivide, el tope por documento se cuenta sobre **posiciones
+    entregadas** y no sobre fragmentos del índice. Sin eso un solo documento
+    podría ocupar seis de las diez posiciones evaluadas, que es exactamente lo
+    que la diversificación existe para impedir.
+    """
     salida: list[dict] = []
+    por_doc: dict[str, int] = {}
 
     for candidato in candidatos:
         if len(salida) >= top:
             break
-        salida.append(
-            {
-                "rank": len(salida) + 1,
-                "chunk_id": candidato.chunk_id,
-                "doc_id": candidato.doc_id,
-                "text": recortar_a_limite(candidato.texto, max_palabras=max_palabras),
-            }
-        )
+        if por_doc.get(candidato.doc_id, 0) >= max_por_doc:
+            continue
+
+        if subdividir_largos:
+            piezas = subdividir(candidato.texto, max_palabras=max_palabras)
+        else:
+            piezas = [recortar_a_limite(candidato.texto, max_palabras=max_palabras)]
+
+        for pieza in piezas:
+            if len(salida) >= top or por_doc.get(candidato.doc_id, 0) >= max_por_doc:
+                break
+            salida.append(
+                {
+                    "rank": len(salida) + 1,
+                    # El chunk_id es el del fragmento original del índice también
+                    # en las piezas: cumple trazabilidad, no emparejamiento
+                    # (§9.2.1 y §10.2.1).
+                    "chunk_id": candidato.chunk_id,
+                    "doc_id": candidato.doc_id,
+                    "text": pieza,
+                }
+            )
+            por_doc[candidato.doc_id] = por_doc.get(candidato.doc_id, 0) + 1
 
     return salida
 
