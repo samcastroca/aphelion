@@ -92,6 +92,26 @@ def dividir_en_oraciones(texto: str, idioma: str) -> list[str]:
     return oraciones
 
 
+def _recortar_tabular(texto: str, max_tokens: int) -> str:
+    """Descarta las filas que el tope tabular iba a tirar de todos modos.
+
+    Sin esto el recorte llega tarde: `pysbd` segmenta los 47,8 MB del mayor CSV
+    del corpus —321 s— para que después se descarten 37.951 de los 38.351
+    fragmentos. Recortar antes de segmentar convierte esa etapa en segundos.
+
+    El corte cae en frontera de párrafo, que en los formatos tabulares es la
+    frontera entre filas: nunca parte un registro por la mitad.
+    """
+    # 4 caracteres por token es la proporción típica en este corpus; el factor
+    # 1.5 cubre la variación y el filtro de fragmentos cortos posterior.
+    presupuesto = int(config.MAX_FRAGMENTOS_TABULARES * max_tokens * 4 * 1.5)
+    if len(texto) <= presupuesto:
+        return texto
+
+    corte = texto.rfind("\n\n", 0, presupuesto)
+    return texto[: corte if corte > 0 else presupuesto]
+
+
 def _partir_por_tokens(texto: str, tokenizador, presupuesto: int) -> list[str]:
     """Corta un texto en ventanas de `presupuesto` tokens usando offsets.
 
@@ -167,11 +187,16 @@ def agrupar(
     tokenizador,
     max_tokens: int = config.CHUNK_TOKENS,
     solape: float = config.CHUNK_SOLAPE,
+    max_fragmentos: int | None = None,
 ) -> list[tuple[str, int]]:
     """Agrupa oraciones en fragmentos. Devuelve (texto, num_tokens).
 
     El solape se aplica arrastrando las últimas oraciones del fragmento anterior,
     de modo que la frontera sigue cayendo en límites oracionales.
+
+    `max_fragmentos` corta en cuanto se alcanza el tope. Importa: el CSV mayor
+    del corpus produce 38.351 fragmentos y tokenizarlos todos para quedarse con
+    400 desperdicia la mayor parte del tiempo de esta etapa.
     """
     if not oraciones:
         return []
@@ -182,6 +207,10 @@ def agrupar(
     tokens_actual = 0
 
     for oracion in oraciones:
+        if max_fragmentos is not None and len(fragmentos) >= max_fragmentos:
+            actual = []  # lo acumulado se descarta: ya sobra
+            break
+
         n = _contar(tokenizador, oracion)
 
         if n > max_tokens:
@@ -258,21 +287,37 @@ def fragmentar(
     if not texto.strip():
         return []
 
+    formato = doc.get("formato") or doc["fuente"].rsplit(".", 1)[-1].lower()
+    tabular = formato in config.FORMATOS_TABULARES
+
+    if tabular:
+        texto = _recortar_tabular(texto, max_tokens)
+
     tokenizador = _tokenizador(nombre_encoder)
     oraciones = dividir_en_oraciones(texto, idioma)
-    grupos = agrupar(oraciones, tokenizador, max_tokens=max_tokens)
+    grupos = agrupar(
+        oraciones,
+        tokenizador,
+        max_tokens=max_tokens,
+        # Se pide un margen sobre el tope porque el filtro de fragmentos cortos
+        # que sigue puede descartar algunos.
+        max_fragmentos=int(config.MAX_FRAGMENTOS_TABULARES * 1.2) if tabular else None,
+    )
 
     # Fragmentos de una o dos palabras son restos de tablas y encabezados
     # sueltos: no aportan significado recuperable y solo compiten por espacio en
     # el ranking.
     grupos = [(t, n) for t, n in grupos if n >= config.MIN_TOKENS_FRAGMENTO]
 
+    if tabular:
+        grupos = grupos[: config.MAX_FRAGMENTOS_TABULARES]
+
     return [
         Fragmento(
             doc_id=doc["doc_id"],
             chunk_id=f"{doc['doc_id']}-chunk-{i:04d}",
             fuente=doc["fuente"],
-            formato=doc.get("formato") or doc["fuente"].rsplit(".", 1)[-1].lower(),
+            formato=formato,
             fenomeno=doc["fenomeno"],
             posicion=i,
             num_tokens=n,
