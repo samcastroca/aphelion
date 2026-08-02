@@ -1,7 +1,6 @@
 """Fragmentación con completitud lingüística garantizada.
 
-La especificación (§3.3) prohíbe que una oración cruce la frontera entre dos
-fragmentos. Eso descarta cortar por número de tokens y obliga a construir los
+Ninguna oración puede cruzar la frontera entre dos fragmentos. Eso descarta cortar por número de tokens y obliga a construir los
 fragmentos acumulando oraciones completas: cuando la siguiente no cabe dentro del
 presupuesto, el fragmento se cierra donde terminó la anterior.
 

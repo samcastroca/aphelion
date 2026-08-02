@@ -2,7 +2,7 @@
 
 Cada extractor devuelve un `Extraccion`: el texto plano del documento más los
 campos descriptivos que convenga conservar como metadata en lugar de mezclar con
-el cuerpo (la especificación lo recomienda explícitamente para JSON, §2.1).
+el cuerpo, que es lo recomendado para los JSON de artículo.
 
 Los PDF sin capa de texto se detectan aquí y se marcan con `necesita_ocr`; su
 procesamiento se resuelve en `ocr.py`.
@@ -210,7 +210,7 @@ def _extraer_pbf(ruta: Path) -> Extraccion:
 
     Un mismo elemento puede repetirse dentro de la tesela; se deduplica por el
     conjunto de atributos para no inflar el índice con copias idénticas
-    (especificación §2.1).
+    para no duplicar la data.
     """
     try:
         import mapbox_vector_tile

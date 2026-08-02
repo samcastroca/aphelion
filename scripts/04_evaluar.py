@@ -1,8 +1,8 @@
 """Evalúa `resultados.jsonl` contra el ground truth interno.
 
 El ground truth oficial no es público, así que se construye uno propio sobre las
-50 consultas reales. Este script calcula NDCG@10 y F1@3 con las fórmulas de la
-§10.2 y desglosa por fenómeno, que es donde suelen verse las diferencias reales
+50 consultas reales. Este script calcula NDCG@10 y F1@3 con las fórmulas del
+reto y desglosa por fenómeno, que es donde suelen verse las diferencias reales
 entre configuraciones.
 
 Uso:
@@ -40,8 +40,13 @@ def main() -> int:
     resumen = metricas.evaluar(resultados, juicios)
 
     print(f"consultas evaluadas: {resumen['consultas_evaluadas']} de {len(resultados)}")
-    print(f"\n  NDCG@10  {resumen['ndcg@10']:.4f}")
-    print(f"  F1@3     {resumen['f1@3']:.4f}")
+    ic_n, ic_f = resumen["ic_ndcg@10"], resumen["ic_f1@3"]
+    print(f"\n  NDCG@10  {resumen['ndcg@10']:.4f}   IC 95% [{ic_n[0]:.4f}, {ic_n[1]:.4f}]")
+    print(f"  F1@3     {resumen['f1@3']:.4f}   IC 95% [{ic_f[0]:.4f}, {ic_f[1]:.4f}]")
+    print(
+        f"\n  Con {resumen['consultas_evaluadas']} consultas, dos configuraciones cuyos\n"
+        "  intervalos se solapan no son distinguibles: la diferencia es ruido."
+    )
 
     # Desglose por fenómeno: un promedio global puede esconder que un fenómeno
     # entero está fallando.

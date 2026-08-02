@@ -1,4 +1,4 @@
-"""Métricas de evaluación, réplica de las fórmulas de la §10.2.
+"""Métricas de evaluación, transcritas literalmente de las fórmulas del reto.
 
 Dos matices del enunciado que cambian el resultado si se pasan por alto:
 
@@ -6,7 +6,7 @@ Dos matices del enunciado que cambian el resultado si se pasan por alto:
   consulta con cinco documentos relevantes tendría techo 0.6 aunque el sistema
   acierte los tres que puede devolver.
 - La relevancia de un fragmento se juzga por su contenido textual, no por su
-  `chunk_id` (§10.2.1). Como cada equipo aplica su propia estrategia de chunking,
+  `chunk_id`. Como cada equipo aplica su propia estrategia de chunking,
   aquí el emparejamiento se hace contra el ground truth interno por `chunk_id`
   únicamente porque ese ground truth se construyó sobre estos mismos fragmentos.
 """
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -98,8 +99,39 @@ def evaluar(
         "consultas_evaluadas": len(ndcgs),
         "ndcg@10": round(sum(ndcgs) / len(ndcgs), 4) if ndcgs else 0.0,
         "f1@3": round(sum(f1s) / len(f1s), 4) if f1s else 0.0,
+        "ic_ndcg@10": tuple(round(v, 4) for v in intervalo_bootstrap(ndcgs)),
+        "ic_f1@3": tuple(round(v, 4) for v in intervalo_bootstrap(f1s)),
         "por_consulta": por_consulta,
     }
+
+
+def intervalo_bootstrap(
+    valores: list[float],
+    remuestreos: int = 2000,
+    confianza: float = 0.95,
+    semilla: int = 20260801,
+) -> tuple[float, float]:
+    """Intervalo de confianza de la media por bootstrap sobre las consultas.
+
+    Con 50 consultas, una diferencia de NDCG@10 por debajo de 0.01 entra dentro
+    del ruido y no distingue dos configuraciones. Sin este intervalo es fácil
+    quedarse con la variante que ganó por azar en el barrido.
+    """
+    if not valores:
+        return (0.0, 0.0)
+
+    rng = random.Random(semilla)
+    n = len(valores)
+    medias = []
+    for _ in range(remuestreos):
+        muestra = [valores[rng.randrange(n)] for _ in range(n)]
+        medias.append(sum(muestra) / n)
+    medias.sort()
+
+    cola = (1 - confianza) / 2
+    bajo = medias[int(cola * remuestreos)]
+    alto = medias[min(int((1 - cola) * remuestreos), remuestreos - 1)]
+    return (bajo, alto)
 
 
 def cargar_juicios(ruta: Path) -> dict[str, Juicio]:

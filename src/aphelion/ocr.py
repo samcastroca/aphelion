@@ -9,10 +9,10 @@ correspondiente al fenómeno 3.
 entiende el layout y produce markdown estructurado. Se descartó por dos razones,
 en este orden:
 
-1. Es una arquitectura decoder. La §4.2 las prohíbe en la construcción del índice.
-   El OCR es preprocesamiento (§2.1) y el argumento de que queda fuera del alcance
-   es defendible, pero el texto que produce termina indexado y la sanción por una
-   lectura estricta es la exclusión, no una penalización.
+1. Es una arquitectura decoder, y el reto las prohíbe en la construcción del
+   índice. El OCR es preprocesamiento y el argumento de que queda fuera del
+   alcance es defendible, pero el texto que produce termina indexado y no vale
+   la pena arriesgar la entrega por eso.
 2. Un VLM que alucina introduce evidencia falsa en el índice, y esa evidencia
    puede acabar presentada al jurado como respuesta. Tesseract, cuando falla,
    produce ruido evidente.

@@ -1,4 +1,4 @@
-"""Completa el directorio `entrega/` con la estructura que exige la §1.4.
+"""Completa el directorio `entrega/` con la estructura que pide el reto.
 
     entrega/
       generador.py         código fuente, versionado, ya está aquí
@@ -10,7 +10,7 @@
           metadata.jsonl
 
 `generador.py` no se copia desde ningún sitio: vive aquí y hay una sola copia,
-porque la §1.4 exige exactamente esta ubicación. Es autónomo —no importa
+porque el reto exige exactamente esta ubicación. Es autónomo —no importa
 `aphelion`— porque el jurado recibe solo este directorio.
 `scripts/verificar_generador.py` comprueba que sigue produciendo lo mismo que el
 paquete.
@@ -64,7 +64,7 @@ def copiar_indices(destino: Path) -> list[str]:
 def exportar_informe() -> bool:
     """Convierte el informe a PDF con pandoc si está disponible.
 
-    La §1.4 exige PDF de máximo 8 páginas. Sin pandoc el script no falla: avisa,
+    El entregable es un PDF de máximo 8 páginas. Sin pandoc el script no falla: avisa,
     porque la conversión puede hacerse a mano y el resto de la entrega sí queda
     armado.
     """
@@ -153,7 +153,7 @@ def main() -> int:
         print(f"pendiente: {', '.join(faltan)}")
         return 1
 
-    print("entrega completa según la §1.4")
+    print("entrega completa")
     return 0
 
 

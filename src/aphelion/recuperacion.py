@@ -2,7 +2,7 @@
 
 Ninguna etapa emplea modelos generativos: no hay reranking por LLM, expansión de
 consulta, filtrado generativo ni síntesis. Todo opera sobre vectores, puntuaciones
-de similitud y metadata, como exige la §8.3.
+de similitud y metadata.
 
 El orden de operaciones es deliberado:
 

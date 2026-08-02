@@ -1,40 +1,35 @@
 #!/usr/bin/env python
-"""Regenerate `resultados.jsonl` from the persisted vector knowledge base.
+"""Genera resultados.jsonl a partir de la base vectorial ya construida.
 
-This is deliverable 4 of section 1.4: "Script Python que utilice el índice, lea
-el archivo de consultas y genere el archivo de resultados resultados.jsonl".
-Section 1.4 also fixes its name and its place, inside `entrega/`. The judges
-receive that directory alone, so the file is deliberately self-contained: it
-imports nothing from the rest of the project. Its only dependencies are the
-libraries the index itself was built with.
+Lee las 50 consultas, las busca contra los índices FAISS persistidos y escribe
+el archivo de resultados sin volver a indexar el corpus.
+
+El archivo es autónomo a propósito: no importa nada del resto del proyecto,
+porque tiene que funcionar con solo esta carpeta y el índice al lado. Sus únicas
+dependencias son las bibliotecas con las que se construyó la base.
 
     pip install faiss-cpu numpy sentence-transformers pymupdf pysbd
 
-Usage (from inside this directory):
+Uso (desde esta carpeta):
     python generador.py
-    python generador.py --queries path/to/questions.pdf --output resultados.jsonl
-    python generador.py --encoders bge-m3          # restrict to one index
+    python generador.py --queries ruta/preguntas.pdf --output resultados.jsonl
+    python generador.py --encoders bge-m3          # un solo índice
 
-The retrieval module follows section 8, in this order:
+El flujo de recuperación es:
 
-    8.1  encode the query with the same encoder used at indexing time
-    8.2  cosine similarity, as inner product over unit-normalized vectors
-    8.4  fuse the per-encoder rankings with Reciprocal Rank Fusion
-    8.7  post-filter over the `fenomeno` metadata field, as a soft boost
-    ---  diversification: cap the positions one document may occupy
-    8.6  aggregate fragments to document level by max pooling
-    9.2  build 3 documents and 10 fragments of at most 250 words each
-    9.3  validate the output against the schema before writing it
+    codificar la consulta con el mismo encoder de la indexación
+    buscar en cada índice y fusionar los rankings con RRF
+    realzar el fenómeno esperado y diversificar por documento
+    top-10 de fragmentos; max pooling para el top-3 de documentos
+    validar el formato antes de escribir
 
-**Restriction on generative models (section 8.3).** No generative model
-participates at any stage: no LLM reranking, no query reformulation or
-expansion, no generative filtering, no synthesis of fragments. Every operation
-runs over vectors, similarity scores and metadata.
+No interviene ningún modelo generativo en ninguna etapa: no hay reordenamiento
+por LLM, reformulación de la consulta, filtrado generativo ni síntesis. Todo se
+resuelve sobre vectores, similitudes y metadata.
 
-Note on language: the metadata field names stay in Spanish (`fuente`, `formato`,
-`fenomeno`, `posicion`, `num_tokens`, `texto`) because Table 1 defines them that
-way, and so do the file names `generador.py` and `resultados.jsonl`, fixed by
-section 1.4. Everything else is in English.
+Los nombres de los campos de metadata (`fuente`, `formato`, `fenomeno`,
+`posicion`, `num_tokens`, `texto`) van en español porque así los define el reto.
+El resto del código está en inglés.
 """
 
 from __future__ import annotations
@@ -49,19 +44,17 @@ from pathlib import Path
 
 import numpy as np
 
-# --- Configuration --------------------------------------------------------
-# These values mirror the ones used to build the index. Changing them changes
-# the output, which is exactly what section 1.4 forbids: a submission that
-# cannot reproduce its results is excluded from evaluation.
+# --- Configuración ---------------------------------------------------------
+# Estos valores son los mismos con los que se construyó el índice. Cambiar
+# cualquiera cambia la salida, y entonces los resultados dejan de reproducirse.
 
 SEED = 20260801
 
 HERE = Path(__file__).resolve().parent
 
-
-# This file lives in `entrega/`, beside the index it reads and the results it
-# writes, as section 1.4 requires. The question file is the only input that sits
-# elsewhere in the development repository, so it falls back one level up.
+# El índice y el archivo de resultados viven junto a este script. El archivo de
+# preguntas es el único insumo que en el repositorio de desarrollo está en otra
+# carpeta, así que se busca también un nivel más arriba.
 DEFAULT_INDEX_ROOT = HERE / "base_vectorial"
 DEFAULT_OUTPUT = HERE / "resultados.jsonl"
 
@@ -79,10 +72,8 @@ def _default_queries() -> Path:
 
 DEFAULT_QUERIES = _default_queries()
 
-# Both are encoder architectures (XLM-RoBERTa) under MIT licence, the two
-# criteria section 4.3 weighs most heavily after multilingual support. Section
-# 4.2 forbids decoder backbones for embedding generation, which is why the MTEB
-# leader Qwen3-Embedding is absent.
+# Los dos son arquitecturas encoder (XLM-RoBERTa) con licencia MIT. Quedan fuera
+# los modelos derivados de un decoder, por más que lideren MTEB.
 ENCODERS = {
     "bge-m3": {
         "model": "BAAI/bge-m3",
@@ -94,34 +85,36 @@ ENCODERS = {
         "model": "intfloat/multilingual-e5-large",
         "dim": 1024,
         "max_tokens": 512,
-        # E5 was trained with asymmetric prefixes; dropping them degrades retrieval.
+        # E5 se entrenó con prefijos asimétricos; omitirlos degrada bastante.
         "query_prefix": "query: ",
     },
 }
 
 TOP_DOCUMENTS = 3
 TOP_FRAGMENTS = 10
-CANDIDATES_PER_INDEX = 100
+# Un documento que no entre en este pool no lo recupera ninguna etapa posterior.
+# Importa sobre todo para el top-3 de documentos: uno que quede en el puesto 95
+# de un índice y en el 120 del otro solo suma consenso si los dos lo traen.
+# Ampliarlo no desplaza el top-10 —con k0=60 el puesto 150 aporta 1/210 frente a
+# 1/65 del puesto 5— y la búsqueda es exhaustiva de todos modos.
+CANDIDATES_PER_INDEX = 200
 RRF_K0 = 60
 MAX_FRAGMENTS_PER_DOC = 3
 PHENOMENON_BOOST = 1.05
 MAX_WORDS_PER_FRAGMENT = 250
 
-# Section 9.2.1 allows splitting an over-long fragment into sub-fragments, each
-# taking its own rank. Measured, that delivers less: short tails — the second
-# piece of a 321-word fragment is 71 words — occupy a whole rank with little
-# content, dropping delivered text from 104k to 84k words and distinct fragments
-# covered from 10 to 6. Trimming keeps all ten positions at 250 words.
+# Un fragmento largo se puede partir en varios, cada uno ocupando su posición, o
+# recortar. Probamos las dos: partir entrega menos texto (84k palabras por
+# corrida frente a 104k) y cubre 6 fragmentos distintos en vez de 10, porque la
+# cola de un fragmento de 321 palabras son 71 y se come una posición entera.
 SPLIT_LONG_FRAGMENTS = False
 
-# Query-to-phenomenon mapping. The three phenomena are the ones section 1.1
-# defines: artificial intelligence in defence, space security and low Earth
-# orbit, and territorial dynamics in Latin America.
+# A qué fenómeno corresponde cada consulta, según el orden del archivo.
 PHENOMENON_RANGES = {1: (1, 16), 2: (17, 32), 3: (33, 50)}
 
 
 def phenomenon_of(query_id: str) -> int | None:
-    """'q018' -> 2. Returns None when the identifier does not fit the pattern."""
+    """'q018' -> 2. Devuelve None si el identificador no encaja."""
     try:
         n = int(query_id.lstrip("qQ"))
     except ValueError:
@@ -133,8 +126,8 @@ def phenomenon_of(query_id: str) -> int | None:
 
 
 def set_seeds(seed: int = SEED) -> None:
-    """Retrieval here is deterministic, but seeds are pinned anyway so that any
-    future component carrying randomness cannot silently break reproducibility."""
+    """La recuperación es determinista, pero fijamos las semillas igual para que
+    algo que se agregue después y traiga aleatoriedad no rompa la reproducción."""
     random.seed(seed)
     np.random.seed(seed)
     try:
@@ -147,7 +140,7 @@ def set_seeds(seed: int = SEED) -> None:
         pass
 
 
-# --- Queries --------------------------------------------------------------
+# --- Consultas -------------------------------------------------------------
 
 _QUERY_ID = re.compile(r"^(q\d{3})\b[\s:.\-]*(.*)$", re.IGNORECASE)
 
@@ -163,8 +156,9 @@ class Query:
 
 
 def _queries_from_text(content: str) -> list[Query]:
-    """Each question may span several lines, so lines accumulate until the next
-    identifier appears. Splitting on line breaks would truncate the long ones."""
+    """Cada pregunta puede ocupar varias líneas, así que vamos acumulando hasta
+    encontrar el siguiente identificador. Cortar por salto de línea truncaría las
+    preguntas largas."""
     queries: list[Query] = []
     current_id: str | None = None
     pieces: list[str] = []
@@ -210,10 +204,10 @@ def _queries_from_jsonl(path: Path) -> list[Query]:
 
 
 def load_queries(path: Path) -> list[Query]:
-    """Accepts PDF, JSONL or plain text: the format of the evaluation question
-    file is not guaranteed to be the same one handed out during development."""
+    """Acepta PDF, JSONL o texto plano: no está garantizado que el archivo de
+    consultas de la evaluación venga en el mismo formato que el de desarrollo."""
     if not path.exists():
-        raise FileNotFoundError(f"query file not found: {path}")
+        raise FileNotFoundError(f"no se encuentra el archivo de consultas: {path}")
 
     suffix = path.suffix.lower()
     if suffix == ".pdf":
@@ -227,7 +221,7 @@ def load_queries(path: Path) -> list[Query]:
     return queries
 
 
-# --- Vector index ---------------------------------------------------------
+# --- Índice vectorial ------------------------------------------------------
 
 
 @dataclass
@@ -245,17 +239,17 @@ class VectorIndex:
         scores, ids = self.faiss_index.search(
             np.ascontiguousarray(vector, dtype=np.float32), k
         )
-        # FAISS pads with -1 when fewer neighbours than requested exist.
+        # FAISS rellena con -1 si hay menos vecinos de los que se piden.
         return [(int(i), float(s)) for i, s in zip(ids[0], scores[0]) if i != -1]
 
 
 def load_index(name: str, root: Path) -> VectorIndex:
-    """Loads one encoder's index and its metadata store (section 5.3).
+    """Carga el índice de un encoder junto con su almacén de metadata.
 
-    FAISS keeps only vectors and internal integer identifiers; the metadata
-    lives in a separate store. Section 1.4 requires the order of the lines in
-    metadata.jsonl to match those internal identifiers, so line n describes
-    vector n. That contract is asserted here rather than trusted.
+    FAISS guarda solo los vectores y sus identificadores internos; la metadata va
+    aparte. El vínculo es posicional —la línea n describe el vector n— y aquí se
+    comprueba en vez de darlo por hecho, porque si se desalinean el sistema
+    devuelve textos que no corresponden y nada falla de forma visible.
     """
     import faiss
 
@@ -264,7 +258,7 @@ def load_index(name: str, root: Path) -> VectorIndex:
     metadata_path = folder / "metadata.jsonl"
 
     if not index_path.exists():
-        raise FileNotFoundError(f"index not found: {index_path}")
+        raise FileNotFoundError(f"no existe el índice: {index_path}")
 
     index = faiss.read_index(str(index_path))
     with metadata_path.open(encoding="utf-8") as fh:
@@ -272,8 +266,8 @@ def load_index(name: str, root: Path) -> VectorIndex:
 
     if index.ntotal != len(metadata):
         raise ValueError(
-            f"index and metadata misaligned in {name}: "
-            f"{index.ntotal} vectors against {len(metadata)} records"
+            f"índice y metadata desalineados en {name}: "
+            f"{index.ntotal} vectores frente a {len(metadata)} registros"
         )
 
     return VectorIndex(name, index, metadata)
@@ -289,21 +283,20 @@ def available_encoders(root: Path) -> list[str]:
     )
 
 
-# --- Query encoding -------------------------------------------------------
+# --- Codificación de la consulta -------------------------------------------
 
 
 class QueryEncoder:
-    """Encodes the query with the same encoder used at indexing time (8.1).
+    """Codifica la consulta con el mismo encoder que se usó al indexar.
 
-    Section 8.1 calls this indispensable: a different encoder would place the
-    query vector and the index vectors in unrelated semantic spaces. The output
-    is unit-normalized so that the index's inner product equals cosine
-    similarity (8.2).
+    Tiene que ser el mismo: con otro, el vector de la consulta y los del índice
+    quedarían en espacios distintos. La salida se normaliza para que el producto
+    interno del índice equivalga a la similitud coseno.
     """
 
     def __init__(self, name: str, device: str | None = None):
         if name not in ENCODERS:
-            raise KeyError(f"unknown encoder: {name}")
+            raise KeyError(f"encoder desconocido: {name}")
         self.name = name
         self.cfg = ENCODERS[name]
         self.device = device or self._default_device()
@@ -338,13 +331,13 @@ class QueryEncoder:
             batch_size=32,
             show_progress_bar=False,
             convert_to_numpy=True,
-            # Required for IndexFlatIP to behave as cosine similarity (section 8.2).
+            # Necesario para que IndexFlatIP se comporte como similitud coseno.
             normalize_embeddings=True,
         )
         return np.asarray(vectors, dtype=np.float32)
 
 
-# --- Retrieval ------------------------------------------------------------
+# --- Recuperación ----------------------------------------------------------
 
 
 @dataclass
@@ -361,17 +354,14 @@ class Candidate:
 def fuse_rrf(
     rankings: dict[str, list[dict]], k0: int = RRF_K0
 ) -> list[Candidate]:
-    """Combines the two indices with Reciprocal Rank Fusion (section 8.4).
+    """Fusiona los rankings de los dos índices con Reciprocal Rank Fusion.
 
-    Of the three strategies section 8.4 lists — CombSUM, CombMNZ and RRF — this
-    one combines rank positions rather than scores, so it is robust to scale
-    differences between encoders. `k0 = 60` is the value the section gives as
-    typical.
+    RRF combina posiciones en lugar de puntuaciones, así que no le afecta que dos
+    encoders tengan escalas distintas. Usamos k0 = 60, el valor habitual.
 
-    An honest caveat: that robustness matters most when fusing heterogeneous
-    rankers, and here both are dense encoders producing cosine values in the
-    same range, so CombSUM could do as well or better. The comparison belongs to
-    the sweep against the internal evaluation set.
+    Con dos encoders densos esa ventaja es menor de lo que parece, porque ambos
+    devuelven coseno en el mismo rango; CombSUM podría rendir igual o mejor.
+    Queda pendiente compararlos contra el conjunto de evaluación.
     """
     pooled: dict[str, Candidate] = {}
 
@@ -397,14 +387,12 @@ def fuse_rrf(
 def apply_phenomenon_boost(
     candidates: list[Candidate], phenomenon: int | None, factor: float = PHENOMENON_BOOST
 ) -> list[Candidate]:
-    """Post-filter over the `fenomeno` metadata field (section 8.7).
+    """Realza los candidatos del fenómeno esperado, sin excluir a los demás.
 
-    Section 8.7 allows filtering on metadata fields, and Table 1 makes
-    `fenomeno` available. It is applied as a soft multiplier rather than a hard
-    filter, because several queries admit cross-cutting evidence: q005 and q046
-    both address Colombia from different phenomena, and q027 spans artificial
-    intelligence and space operations. A strict filter would foreclose
-    legitimately relevant documents.
+    Es un multiplicador suave y no un filtro duro porque varias consultas admiten
+    evidencia transversal: q005 y q046 tratan Colombia desde fenómenos distintos,
+    y q027 cruza inteligencia artificial con operaciones espaciales. Filtrar en
+    firme dejaría fuera documentos legítimamente relevantes.
     """
     if phenomenon is None or factor == 1.0:
         return candidates
@@ -417,15 +405,15 @@ def apply_phenomenon_boost(
 
 
 def drop_duplicates(candidates: list[Candidate]) -> list[Candidate]:
-    """Removes fragments with repeated text, keeping the best-scored one.
+    """Quita fragmentos con el mismo texto, conservando el mejor puntuado.
 
-    The corpus holds 4,445 fragments (3%) with byte-identical text: the same
-    tables reprinted across reports, the same institutional headers. Two copies
-    of one text carry the same relevance and burn two of the ten positions
-    NDCG@10 evaluates to inform once.
+    En el corpus hay 4.445 fragmentos (3%) con texto idéntico: tablas reimpresas
+    en varios informes, encabezados institucionales repetidos. Dos copias del
+    mismo texto valen lo mismo y gastan dos de las diez posiciones para decir una
+    sola cosa.
 
-    Comparison runs over whitespace-normalized text, so variants differing only
-    in line breaks fall too.
+    La comparación va sobre el texto con espacios normalizados, así que también
+    caen las variantes que solo difieren en saltos de línea.
     """
     seen: set[str] = set()
     unique: list[Candidate] = []
@@ -443,11 +431,10 @@ def drop_duplicates(candidates: list[Candidate]) -> list[Candidate]:
 def diversify(
     candidates: list[Candidate], limit: int, max_per_doc: int = MAX_FRAGMENTS_PER_DOC
 ) -> list[Candidate]:
-    """Caps how many fragments a single document contributes to the final list.
+    """Limita cuántas posiciones puede ocupar un mismo documento.
 
-    Without the cap one document can occupy all ten evaluated positions; if it
-    turns out to be irrelevant, the whole query is lost. The cap spreads that
-    risk across several documents.
+    Sin el tope, un documento puede llevarse las diez; si resulta no ser
+    relevante, se pierde la consulta entera. El tope reparte ese riesgo.
     """
     selected: list[Candidate] = []
     per_doc: dict[str, int] = {}
@@ -460,7 +447,7 @@ def diversify(
         if len(selected) >= limit:
             break
 
-    # If the cap left the list short, fill it with the best discarded ones.
+    # Si el tope dejó la lista corta, se completa con los mejores descartados.
     if len(selected) < limit:
         taken = {c.chunk_id for c in selected}
         for candidate in candidates:
@@ -476,17 +463,16 @@ def diversify(
 def aggregate_to_documents(
     candidates: list[Candidate], top: int = TOP_DOCUMENTS
 ) -> list[str]:
-    """Aggregates fragments to document level by max pooling (section 8.6).
+    """Agrega fragmentos a nivel de documento por max pooling.
 
-    Of the three strategies section 8.6 lists — best fragment, sum of all
-    retrieved fragments, weighted mean — max pooling is chosen: each document
-    inherits its best fragment's score. Sum pooling is rejected for length bias,
-    since a document with forty weak fragments at 0.15 accumulates 6.0 and
-    outranks a focused report holding the exact answer at 0.85. Given the corpus
-    size heterogeneity, that bias would be severe.
+    Cada documento se queda con la puntuación de su mejor fragmento. Descartamos
+    sumar todos los fragmentos recuperados por el sesgo de longitud: un documento
+    con cuarenta fragmentos flojos de 0,15 acumula 6,0 y desplaza a un informe
+    corto que trae la respuesta exacta con 0,85. Con alertas de un párrafo y
+    atlas de cientos de páginas en el mismo corpus, ese sesgo sería grave.
 
-    Fragment count acts only as a tiebreaker, weighted small enough not to
-    disturb the primary ordering.
+    El número de fragmentos solo desempata, con un peso lo bastante pequeño para
+    no alterar el orden principal.
     """
     best: dict[str, float] = {}
     count: dict[str, int] = {}
@@ -513,7 +499,7 @@ class Retriever:
         candidates_per_index: int = CANDIDATES_PER_INDEX,
     ):
         if not indices:
-            raise ValueError("no indices loaded")
+            raise ValueError("no hay índices cargados")
         self.indices = indices
         self.k0 = k0
         self.boost = boost
@@ -537,11 +523,10 @@ class Retriever:
         candidates = fuse_rrf(rankings, self.k0)
         candidates = apply_phenomenon_boost(candidates, query.phenomenon, self.boost)
 
-        # Diversification runs before pooling because it protects the fragment
-        # list, which is what NDCG@10 evaluates. Deduplication applies only
-        # there too: two distinct documents may share a text, and dropping one
-        # would make it unreachable. Document aggregation therefore uses the
-        # full candidate set, so no signal is discarded.
+        # Diversificar va antes del pooling porque protege la lista de
+        # fragmentos, que es lo que mide NDCG@10. La deduplicación se aplica solo
+        # ahí: dos documentos distintos pueden compartir un texto y descartar uno
+        # lo volvería inalcanzable. La agregación usa el conjunto completo.
         fragments = diversify(
             drop_duplicates(candidates), TOP_FRAGMENTS, self.max_per_doc
         )
@@ -550,18 +535,18 @@ class Retriever:
         return documents, fragments
 
 
-# --- Output construction --------------------------------------------------
+# --- Construcción de la salida ---------------------------------------------
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[^\s])")
 
 
 def split_sentences(text: str) -> list[str]:
-    """Sentence segmentation for the 250-word trim.
+    """Segmenta en oraciones para poder recortar sin partir ninguna.
 
-    Uses pysbd when available — it is what the chunker used — and falls back to
-    a punctuation regex so the deliverable still runs without that dependency.
-    Both respect paragraph boundaries: text from separate paragraphs is never
-    merged into one sentence.
+    Usa pysbd, que es lo que usó el fragmentador, y si no está recurre a una
+    expresión regular sobre la puntuación, para que el script siga corriendo sin
+    esa dependencia. Las dos respetan los párrafos: nunca unen texto de párrafos
+    distintos en una misma oración.
     """
     sentences: list[str] = []
     for paragraph in text.split("\n\n"):
@@ -583,12 +568,12 @@ def word_count(text: str) -> int:
 
 
 def split_to_limit(text: str, max_words: int = MAX_WORDS_PER_FRAGMENT) -> list[str]:
-    """Splits a fragment into pieces of at most `max_words`, never cutting a
-    sentence (section 9.2.1).
+    """Parte un fragmento en piezas de como máximo `max_words`, sin cortar
+    ninguna oración por la mitad.
 
-    A sentence exceeding the limit on its own — it happens with tables dumped to
-    text — is cut by words: respecting the maximum takes priority, since a
-    fragment above it is discarded by the automatic evaluator (section 9.3.2).
+    Si una sola oración ya excede el límite —pasa con tablas volcadas a texto— se
+    corta por palabras: respetar el máximo manda, porque un fragmento que lo
+    supera se descarta en la evaluación.
     """
     if word_count(text) <= max_words:
         return [text]
@@ -625,23 +610,21 @@ def split_to_limit(text: str, max_words: int = MAX_WORDS_PER_FRAGMENT) -> list[s
 def build_record(
     query_id: str, documents: list[str], fragments: list[Candidate]
 ) -> dict:
-    """Builds one query's JSON object, per the schema of section 9.3.1.
+    """Arma el objeto JSON de una consulta.
 
-    Exactly 3 documents and 10 fragments, each field of Table 2 present, and no
-    fragment above 250 words (9.2). The reported `chunk_id` stays that of the
-    originating index fragment even after trimming: section 10.2.1 states it is
-    not the matching key against the ground truth, since every team chunks
-    differently — it serves traceability and verification.
+    Exactamente 3 documentos y 10 fragmentos, con todos sus campos y ninguno por
+    encima de 250 palabras. El `chunk_id` que se reporta sigue siendo el del
+    fragmento original del índice aunque se haya recortado: sirve para trazar de
+    dónde salió el texto, no para emparejar con el ground truth.
     """
     docs = [
         {"rank": i, "doc_id": doc_id}
         for i, doc_id in enumerate(documents[:TOP_DOCUMENTS], start=1)
     ]
 
-    # Fragments above the word limit are split rather than truncated, each piece
-    # taking its own rank. The per-document cap counts delivered positions, not
-    # index fragments: otherwise one document could take six of the ten
-    # evaluated slots, which is what diversification exists to prevent.
+    # Cuando se parte un fragmento largo, el tope por documento cuenta posiciones
+    # entregadas y no fragmentos del índice; si no, un solo documento podría
+    # llevarse seis de las diez, que es justo lo que la diversificación evita.
     frags: list[dict] = []
     per_doc: dict[str, int] = {}
 
@@ -686,13 +669,12 @@ def build_record(
 
 
 def validate(path: Path, expected_queries: int = 50) -> list[str]:
-    """Checks the file against sections 9.3.2 and 10.3 before delivery.
+    """Revisa el archivo antes de entregarlo.
 
-    Section 9.3.2 warns that objects with missing fields, arrays of a size other
-    than 3 and 10, or fragments above 250 words are penalised or discarded by
-    the automatic evaluation. Section 10.3 adds that submissions with an
-    incorrect format are not considered at all. Cheap to check, expensive to get
-    wrong.
+    Un objeto al que le falte un campo, una lista con un número de elementos
+    distinto de 3 o 10, o un fragmento de más de 250 palabras, se penaliza o se
+    descarta en la evaluación automática. Comprobarlo cuesta nada; equivocarse,
+    la entrega entera.
     """
     problems: list[str] = []
 
@@ -700,22 +682,22 @@ def validate(path: Path, expected_queries: int = 50) -> list[str]:
         lines = [line for line in fh if line.strip()]
 
     if len(lines) != expected_queries:
-        problems.append(f"{len(lines)} lines, expected {expected_queries}")
+        problems.append(f"{len(lines)} líneas, se esperaban {expected_queries}")
 
     seen: set[str] = set()
     for i, line in enumerate(lines, start=1):
         try:
             record = json.loads(line)
         except json.JSONDecodeError as e:
-            problems.append(f"line {i}: invalid JSON ({e})")
+            problems.append(f"línea {i}: JSON inválido ({e})")
             continue
 
         query_id = record.get("query_id")
         if not query_id:
-            problems.append(f"line {i}: missing query_id")
+            problems.append(f"línea {i}: falta query_id")
             continue
         if query_id in seen:
-            problems.append(f"line {i}: duplicate query_id ({query_id})")
+            problems.append(f"línea {i}: query_id repetido ({query_id})")
         seen.add(query_id)
 
         documents = record.get("documents") or []
@@ -723,11 +705,11 @@ def validate(path: Path, expected_queries: int = 50) -> list[str]:
 
         if len(documents) != TOP_DOCUMENTS:
             problems.append(
-                f"{query_id}: {len(documents)} documents, expected {TOP_DOCUMENTS}"
+                f"{query_id}: {len(documents)} documentos, se esperaban {TOP_DOCUMENTS}"
             )
         if len(fragments) != TOP_FRAGMENTS:
             problems.append(
-                f"{query_id}: {len(fragments)} fragments, expected {TOP_FRAGMENTS}"
+                f"{query_id}: {len(fragments)} fragmentos, se esperaban {TOP_FRAGMENTS}"
             )
 
         for fragment in fragments:
@@ -735,13 +717,13 @@ def validate(path: Path, expected_queries: int = 50) -> list[str]:
                 f for f in ("rank", "chunk_id", "doc_id", "text") if f not in fragment
             ]
             if missing:
-                problems.append(f"{query_id}: fragment missing {missing}")
+                problems.append(f"{query_id}: al fragmento le faltan campos {missing}")
                 continue
             words = word_count(fragment["text"])
             if words > MAX_WORDS_PER_FRAGMENT:
                 problems.append(
-                    f"{query_id} rank {fragment['rank']}: {words} words "
-                    f"(maximum {MAX_WORDS_PER_FRAGMENT})"
+                    f"{query_id} rango {fragment['rank']}: {words} palabras "
+                    f"(máximo {MAX_WORDS_PER_FRAGMENT})"
                 )
 
     return problems
@@ -751,11 +733,11 @@ def validate(path: Path, expected_queries: int = 50) -> list[str]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Regenerate resultados.jsonl from the index.")
+    ap = argparse.ArgumentParser(description="Genera resultados.jsonl desde el índice.")
     ap.add_argument("--queries", type=Path, default=DEFAULT_QUERIES)
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     ap.add_argument("--index-root", type=Path, default=DEFAULT_INDEX_ROOT)
-    ap.add_argument("--encoders", help="comma-separated list; defaults to all found")
+    ap.add_argument("--encoders", help="lista separada por comas; por defecto todos los encontrados")
     ap.add_argument("--k0", type=int, default=RRF_K0)
     ap.add_argument("--boost", type=float, default=PHENOMENON_BOOST)
     ap.add_argument("--max-per-doc", type=int, default=MAX_FRAGMENTS_PER_DOC)
@@ -764,22 +746,22 @@ def main() -> int:
     set_seeds()
 
     queries = load_queries(args.queries)
-    print(f"queries: {len(queries)}")
+    print(f"consultas: {len(queries)}")
 
     found = available_encoders(args.index_root)
     if not found:
-        print(f"no indices under {args.index_root}")
+        print(f"no hay índices en {args.index_root}")
         return 1
 
     chosen = [e.strip() for e in args.encoders.split(",")] if args.encoders else found
     missing = set(chosen) - set(found)
     if missing:
-        print(f"indices not found: {sorted(missing)} (available: {found})")
+        print(f"índices no encontrados: {sorted(missing)} (disponibles: {found})")
         return 1
 
     indices = {name: load_index(name, args.index_root) for name in chosen}
     for name, index in indices.items():
-        print(f"index {name}: {len(index):,} fragments")
+        print(f"índice {name}: {len(index):,} fragmentos")
 
     retriever = Retriever(
         indices, k0=args.k0, boost=args.boost, max_per_doc=args.max_per_doc
@@ -798,12 +780,12 @@ def main() -> int:
 
     problems = validate(args.output, expected_queries=len(queries))
     if problems:
-        print(f"\n{len(problems)} schema problems:")
+        print(f"\n{len(problems)} problemas de formato:")
         for problem in problems[:20]:
             print(f"  - {problem}")
         return 1
 
-    print("schema validated: format is correct")
+    print("formato validado: el esquema es correcto")
     return 0
 
 

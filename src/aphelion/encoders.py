@@ -1,7 +1,7 @@
 """Codificación semántica.
 
 Los vectores se normalizan a norma unitaria en la codificación, de modo que el
-producto interno del índice equivale a la similitud coseno (§8.2).
+producto interno del índice equivale a la similitud coseno.
 
 E5 exige prefijos asimétricos (`query: ` / `passage: `): fueron parte de su
 entrenamiento y omitirlos degrada la recuperación de forma notable. BGE-M3 no los

@@ -58,7 +58,7 @@ listados bibliográficos de PubMed ajenos a las consultas.
 - `fenomeno` = 1, 2 o 3, tomado del inventario (no inferido)
 - `ruta` = campo adicional no obligatorio, para trazabilidad interna
 
-**Justificación:** la §10.2.1 establece que el emparejamiento con el ground truth se
+**Justificación:** el emparejamiento con el ground truth se
 realiza por `fuente`, no por `doc_id`. Cualquier divergencia respecto al nombre
 original de ADL invalida la métrica F1@3 con independencia de la calidad del sistema.
 
@@ -74,7 +74,7 @@ introduciría las consultas de evaluación dentro del corpus.
 | Formato | Herramienta | Notas |
 |---|---|---|
 | PDF con texto | PyMuPDF | Orden de lectura por bloques, no por posición cruda |
-| PDF escaneado | OCR (ver §4) | 60 archivos detectados por umbral <200 caracteres |
+| PDF escaneado | OCR (ver más abajo) | 60 archivos detectados por umbral <200 caracteres |
 | JSON artículo | parser propio | `title` + `body_paragraphs`/`body_text` al cuerpo; `url`, `date`, `authors`, `tags` a metadata |
 | JSON catálogo | parser propio | Cada registro de la lista es un fragmento independiente |
 | CSV / XLSX | pandas | Cada fila es una unidad, con `columna: valor` como contexto |
@@ -99,9 +99,9 @@ Aplicada uniformemente tras la extracción:
 (3B, MIT, VLM con R-SWA), pese a su mejor manejo de layout, por dos razones en
 este orden:
 
-1. **Es una arquitectura decoder y la §4.2 las prohíbe en la construcción del
-   índice.** El OCR pertenece al preprocesamiento (§2.1), donde la especificación
-   lo recomienda, y el argumento de que la prohibición no lo alcanza es
+1. **Es una arquitectura decoder, y el reto las prohíbe en la construcción del
+   índice.** El OCR pertenece al preprocesamiento, donde el reto lo recomienda
+   explícitamente, y el argumento de que la prohibición no lo alcanza es
    defendible. Pero el texto que produce termina indexado, y la sanción por una
    lectura estricta es la exclusión, no una penalización. El riesgo asimétrico
    decide: no hay ganancia de calidad que compense quedar fuera de la evaluación.
@@ -126,8 +126,8 @@ imprimibles y palabras por página.
 - El conteo de tokens usa el tokenizador del propio encoder, no una aproximación por
   palabras.
 - Cuando el límite cae dentro de una oración, el corte retrocede al final de la última
-  oración completa que quepa. **Ninguna oración cruza la frontera entre fragmentos**
-  (requisito §3.3).
+  oración completa que quepa: **ninguna oración cruza la frontera entre fragmentos**,
+  que es un requisito del reto.
 - **Documentos cortos** (alertas, registros de catálogo, filas tabulares) se emiten como
   fragmento único sin forzar el tamaño objetivo.
 
@@ -141,7 +141,7 @@ que fragmentan el contexto — precisamente la métrica F1@3 que se evalúa.
 **Parámetro sujeto a barrido experimental.** El tamaño de chunk presenta tensión entre
 las dos métricas: 512 tokens favorece NDCG@10 mientras 1024 favorece F1@3. Dado que el
 Conteo de Borda pondera ambas por igual, el valor se fija empíricamente mediante barrido
-sobre {384, 512, 768} contra el conjunto de evaluación interno (§9).
+sobre {384, 512, 768} contra el conjunto de evaluación interno.
 
 ### Metadata por fragmento
 
@@ -177,9 +177,9 @@ distinto al de la consulta. Complementa la debilidad conocida de BGE-M3 en esa d
 **Modelos descartados y por qué:**
 
 - **Qwen3-Embedding** (líder en MTEB multilingüe, 70.88): arquitectura decoder derivada
-  de un backbone autoregresivo. **Prohibido explícitamente por la §4.2.**
+  de un backbone autoregresivo. **El reto prohíbe explícitamente los decoders.**
 - **Jina Embeddings v3**: licencia CC-BY-NC-4.0, incompatible con el criterio de
-  licencia de la §4.3.
+  licencia.
 - **LaBSE**: entrenado con objetivo de alineación de frases paralelas; carece de noción
   de relevancia asimétrica y rinde 18.80 en recuperación zero-shot.
 
@@ -195,7 +195,7 @@ Con ~150k vectores, la búsqueda exhaustiva es exacta y se resuelve en milisegun
 volumen no requiere, y en esta tarea la exactitud del ranking constituye la métrica.
 
 La normalización previa hace que el producto interno sea equivalente a la similitud
-coseno (§8.2).
+coseno.
 
 **Persistencia:** `faiss.write_index()` produce `index.faiss`; la metadata se serializa
 en `metadata.jsonl` **preservando el orden de inserción**, de modo que el identificador
@@ -219,7 +219,7 @@ Flujo por consulta:
 5. **Agregación a documento por max pooling**: la puntuación de un documento es la de su
    mejor fragmento. Se descarta sum pooling por su sesgo de longitud — un documento con
    40 fragmentos débiles (0.15) acumula 6.0 y desplaza a un informe preciso con un
-   fragmento de 0.85. Dada la heterogeneidad de tamaños del corpus (§1.3), este sesgo
+   fragmento de 0.85. Dada la heterogeneidad de tamaños del corpus, este sesgo
    sería severo.
 6. **Boost suave por fenómeno**, no filtro duro. La correspondencia consulta→fenómeno es
    conocida (q001–q016 → F1, q017–q032 → F2, q033–q050 → F3), pero varias consultas
@@ -229,7 +229,7 @@ Flujo por consulta:
 
 **Ningún modelo generativo interviene** en ninguna etapa: no hay reranking por LLM,
 expansión de consulta, filtrado generativo ni síntesis. Todas las operaciones se
-realizan sobre vectores, puntuaciones de similitud y metadata (§8.3).
+realizan sobre vectores, puntuaciones de similitud y metadata.
 
 ### Construcción de la salida
 
@@ -237,7 +237,7 @@ realizan sobre vectores, puntuaciones de similitud y metadata (§8.3).
 - **10 fragmentos** por consulta, cada uno de **máximo 250 palabras**. Los fragmentos que
   exceden el límite se subdividen respetando fronteras oracionales; los cortos pueden
   concatenarse con fragmentos adyacentes del mismo documento. En ambos casos el
-  `chunk_id` reportado es el del fragmento original del índice (§9.2.1).
+  `chunk_id` reportado es el del fragmento original del índice.
 
 ---
 
@@ -255,7 +255,7 @@ distribución real de evaluación en lugar de consultas sintéticas.
 2. Etiquetado manual en tres niveles: relevante / parcialmente relevante / no relevante.
 3. Reparto entre los cuatro integrantes, con solapamiento parcial para medir acuerdo.
 
-**Métricas implementadas** (réplica exacta de las fórmulas de la §10.2): NDCG@10 sobre
+**Métricas implementadas**, transcritas literalmente de las fórmulas del reto: NDCG@10 sobre
 fragmentos y F1@3 sobre documentos, con la normalización `min(|Dq|, 3)` en el recall.
 
 Este conjunto es la base para el barrido de hiperparámetros: tamaño de chunk, solape,
@@ -292,7 +292,7 @@ entrega/
 ```
 
 De esos cuatro elementos, `generador.py` es el único que es código fuente: vive
-versionado en `entrega/` porque es donde la §1.4 lo exige, y hay una sola copia.
+versionado en `entrega/` porque es donde el reto lo exige, y hay una sola copia.
 Los otros tres son artefactos que produce `scripts/empaquetar.py` y no se
 versionan.
 
@@ -353,7 +353,7 @@ entre 10 y 20, así que también entra al barrido.
 **Oportunidad pendiente de medir: la cabeza sparse de BGE-M3.** El modelo produce
 representaciones densas, sparse y multi-vector en una sola pasada. En MIRACL, la
 cabeza densa sola rinde 67,8 y la combinación de las tres alcanza **70,0**. Usar
-las tres no viola la §4.2: ninguna es un decoder.
+las tres no infringe la prohibición: ninguna es un decoder.
 
 El matiz que impide adoptarla a ciegas: **la recuperación sparse rinde peor
 justamente en cross-lingual**, donde el solapamiento de vocabulario entre consulta
@@ -409,8 +409,8 @@ aparecería como recuperación mediocre. Al generarlo desde
 
 | Riesgo | Mitigación |
 |---|---|
-| El entregable no arranca fuera del repositorio → exclusión (§1.4) | `generador.py` vive en `entrega/` y es autónomo; `empaquetar.py` lo ejecuta desde ahí, con las rutas que verá el jurado |
-| El OCR por VLM cae bajo la prohibición de decoders (§4.2) → exclusión | Se usa Tesseract; el VLM queda descartado y la decisión se declara en el informe |
+| El entregable no arranca fuera del repositorio → exclusión | `generador.py` vive en `entrega/` y es autónomo; `empaquetar.py` lo ejecuta desde ahí, con las rutas que verá el jurado |
+| El OCR por VLM cae bajo la prohibición de decoders → exclusión | Se usa Tesseract; el VLM queda descartado y la decisión se declara en el informe |
 | OCR que falla en silencio e inyecta ruido en el índice | Tres señales por documento (diacríticos, no imprimibles, palabras/página) y revisión manual de lo que las dispare |
 | Caché de embeddings reutilizada entre corridas distintas → índice desalineado | La ruta de caché lleva la huella del archivo de fragmentos; además se verifica el tamaño de cada bloque al cargarlo |
 | Colisión de nombres en `fuente` (59 casos) | Se reporta el nombre estandarizado literal; la ruta se conserva aparte para trazabilidad |

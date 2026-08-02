@@ -33,7 +33,57 @@ from pathlib import Path
 from aphelion import config, consultas as mod_consultas, encoders, recuperacion, vectores
 
 
-RELEVANTE = 2.0  # el umbral de la §10.2.2: 'parcial' no cuenta como documento
+RELEVANTE = 2.0  # 'parcial' no cuenta como documento relevante
+
+
+def kappa_cohen(pares: list[tuple[float, float]]) -> float | None:
+    """Acuerdo entre dos anotadores sobre los mismos fragmentos, corregido por azar.
+
+    El solape entre anotadores existe justamente para poder calcular esto. Si el
+    acuerdo es bajo, el ground truth no sirve para comparar configuraciones:
+    estaríamos midiendo el criterio de quien anotó, no la calidad del sistema.
+    Por debajo de 0,61 el acuerdo deja de considerarse sustancial.
+    """
+    if not pares:
+        return None
+
+    n = len(pares)
+    categorias = sorted({v for par in pares for v in par})
+    observado = sum(1 for a, b in pares if a == b) / n
+
+    esperado = 0.0
+    for c in categorias:
+        p_a = sum(1 for a, _ in pares if a == c) / n
+        p_b = sum(1 for _, b in pares if b == c) / n
+        esperado += p_a * p_b
+
+    if esperado >= 1.0:
+        return 1.0  # todos coincidieron en una sola categoría
+    return (observado - esperado) / (1 - esperado)
+
+
+def medir_acuerdo(por_anotador: dict[str, dict[str, float]]) -> None:
+    """Reporta el acuerdo de cada par de anotadores con fragmentos en común."""
+    nombres = sorted(por_anotador)
+    reportado = False
+
+    for i, a in enumerate(nombres):
+        for b in nombres[i + 1 :]:
+            comunes = set(por_anotador[a]) & set(por_anotador[b])
+            if len(comunes) < 20:
+                continue
+            pares = [(por_anotador[a][c], por_anotador[b][c]) for c in sorted(comunes)]
+            k = kappa_cohen(pares)
+            if k is None:
+                continue
+            if not reportado:
+                print("\nacuerdo entre anotadores:")
+                reportado = True
+            aviso = "" if k >= 0.61 else "   <- por debajo de lo aceptable"
+            print(f"  {a} vs {b}: kappa {k:.2f} sobre {len(comunes)} fragmentos{aviso}")
+
+    if not reportado:
+        print("\nsin solape suficiente para medir acuerdo entre anotadores")
 
 
 def consolidar(origen: Path, destino: Path) -> int:
@@ -54,9 +104,11 @@ def consolidar(origen: Path, destino: Path) -> int:
 
     fragmentos: dict[str, dict[str, float]] = {}
     documentos: dict[str, set[str]] = {}
+    por_anotador: dict[str, dict[str, float]] = {}
     juicios, sin_anotar = 0, 0
 
     for ruta in csvs:
+        propios: dict[str, float] = {}
         with ruta.open(encoding="utf-8-sig", newline="") as fh:
             for fila in csv.DictReader(fh):
                 bruto = (fila.get("relevancia") or "").strip()
@@ -73,8 +125,10 @@ def consolidar(origen: Path, destino: Path) -> int:
                 q = fila["query_id"]
                 previo = fragmentos.setdefault(q, {}).get(fila["chunk_id"], 0.0)
                 fragmentos[q][fila["chunk_id"]] = max(previo, grado)
+                propios[f"{q}|{fila['chunk_id']}"] = grado
                 if grado >= RELEVANTE:
                     documentos.setdefault(q, set()).add(fila["doc_id"])
+        por_anotador[ruta.stem] = propios
 
     if not juicios:
         print("ningún CSV tiene la columna 'relevancia' rellenada")
@@ -96,6 +150,10 @@ def consolidar(origen: Path, destino: Path) -> int:
             )
 
     print(f"{juicios:,} juicios sobre {len(fragmentos)} consultas -> {destino}")
+    if juicios < 500:
+        print(f"  {juicios} juicios es poco: por debajo de ~500 las comparaciones")
+        print("  entre configuraciones dejan de ser fiables")
+    medir_acuerdo(por_anotador)
     if sin_anotar:
         print(f"  {sin_anotar:,} filas siguen sin anotar")
     faltan = 50 - len(fragmentos)

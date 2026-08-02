@@ -40,9 +40,9 @@ BASE_VECTORIAL = ENTREGA / "base_vectorial"
 RESULTADOS = ENTREGA / "resultados.jsonl"
 
 # --- Encoders -------------------------------------------------------------
-# Ambos son arquitecturas encoder (XLM-RoBERTa) con licencia MIT. La
-# especificación prohíbe los decoders para generar embeddings (§4.2), lo que
-# descarta Qwen3-Embedding pese a liderar MTEB.
+# Ambos son arquitecturas encoder (XLM-RoBERTa) con licencia MIT. El reto
+# prohíbe los decoders para generar embeddings, lo que descarta Qwen3-Embedding
+# pese a liderar MTEB.
 
 ENCODERS = {
     "bge-m3": {
@@ -76,10 +76,10 @@ ENCODER_PRINCIPAL = "bge-m3"
 CHUNK_TOKENS = 512
 CHUNK_SOLAPE = 0.15
 MIN_TOKENS_FRAGMENTO = 10  # por debajo son restos de tabla, no contenido
-MAX_PALABRAS_FRAGMENTO = 250  # límite de la especificación, §9.2
+MAX_PALABRAS_FRAGMENTO = 250  # límite que impone el reto
 
-# La §9.2.1 admite dividir un fragmento largo en sub-fragmentos, cada uno con su
-# propio rango. El argumento a favor era que truncar descarta evidencia: el 76,5%
+# Un fragmento largo se puede dividir en sub-fragmentos, cada uno ocupando su
+# propia posición. El argumento a favor era que truncar descarta evidencia: el 76,5%
 # de los fragmentos excede las 250 palabras.
 #
 # Medido, el argumento no se sostiene. Subdividir **reduce** el texto entregado
@@ -103,8 +103,8 @@ SUBDIVIDIR_FRAGMENTOS = False
 # independiente y el valor marginal de la fila 3.000 es nulo. Los PDF largos y
 # legítimos —una ley de 1.960 fragmentos— no se tocan.
 #
-# No se excluyen los archivos: el emparejamiento del F1@3 es por `fuente`
-# (§10.2.1), así que el documento debe seguir siendo alcanzable.
+# No se excluyen los archivos: el emparejamiento del F1@3 es por `fuente`, así
+# que el documento debe seguir siendo alcanzable.
 MAX_FRAGMENTOS_TABULARES = 400
 FORMATOS_TABULARES = frozenset({"csv", "xlsx"})
 
@@ -112,7 +112,17 @@ FORMATOS_TABULARES = frozenset({"csv", "xlsx"})
 
 TOP_DOCUMENTOS = 3
 TOP_FRAGMENTOS = 10
-CANDIDATOS_POR_INDICE = 100
+# Cuántos candidatos trae cada índice antes de fusionar. 100 es el mínimo
+# razonable y se recomienda entre 200 y 500 para recuperación de propósito
+# general. Lo que decide es que un documento que no aparezca en este pool no lo
+# puede recuperar ninguna etapa posterior, y a nosotros nos importa el pool
+# profundo sobre todo para el F1@3: un documento que queda en el puesto 95 de un
+# índice y en el 120 del otro solo suma consenso si los dos lo traen.
+#
+# Ampliarlo no desplaza nada del top-10: con k0=60, un candidato en el puesto 150
+# aporta 1/210 frente a 1/65 de uno en el puesto 5. Y la búsqueda es exhaustiva
+# de todos modos, así que no cuesta tiempo.
+CANDIDATOS_POR_INDICE = 200
 RRF_K0 = 60
 MAX_FRAGMENTOS_POR_DOC = 3  # diversificación del top-10
 BOOST_FENOMENO = 1.05  # multiplicador suave, no filtro duro

@@ -1,9 +1,8 @@
 """Construcción del archivo de resultados.
 
-La §9.2 impone que cada fragmento devuelto tenga como máximo 250 palabras. Los
+Cada fragmento devuelto puede tener como máximo 250 palabras. Los
 fragmentos del índice se dimensionan en tokens (512), lo que en español suele
-quedar por debajo de ese límite pero puede excederlo. Las reglas de la §9.2.1
-resuelven ambos casos:
+quedar por debajo de ese límite pero puede excederlo. Hay dos salidas:
 
 - Si un fragmento supera las 250 palabras, se subdivide respetando fronteras
   oracionales. Cada subfragmento ocupa su propia posición en la lista de diez.
@@ -11,7 +10,8 @@ resuelven ambos casos:
   documento mientras no se rebase el límite.
 
 En ambos casos el `chunk_id` reportado es el del fragmento original del índice:
-cumple una función de trazabilidad, no de emparejamiento (§10.2.1).
+sirve para trazar de dónde salió el texto, no para emparejar con el ground
+truth.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def recortar_a_limite(
 
     # Si la primera oración ya excede el límite por sí sola no hay frontera
     # oracional utilizable, y respetar el máximo tiene prioridad: un fragmento
-    # que lo supera es descartado por el evaluador automático (§9.3.2).
+    # que lo supera se descarta en la evaluación automática.
     if acumulado and total <= max_palabras:
         return " ".join(acumulado)
 
@@ -67,11 +67,11 @@ def subdividir(
     max_palabras: int = config.MAX_PALABRAS_FRAGMENTO,
 ) -> list[str]:
     """Parte un fragmento en piezas de como máximo `max_palabras`, sin cortar
-    oraciones (§9.2.1).
+    ninguna oración por la mitad.
 
     Una oración que por sí sola excede el límite —ocurre con tablas volcadas a
     texto— se corta por palabras: respetar el máximo tiene prioridad, porque un
-    fragmento que lo supera es descartado por el evaluador automático (§9.3.2).
+    fragmento que lo supera se descarta en la evaluación automática.
     """
     if contar_palabras(texto) <= max_palabras:
         return [texto]
@@ -139,9 +139,8 @@ def construir_fragmentos(
             salida.append(
                 {
                     "rank": len(salida) + 1,
-                    # El chunk_id es el del fragmento original del índice también
-                    # en las piezas: cumple trazabilidad, no emparejamiento
-                    # (§9.2.1 y §10.2.1).
+                    # También en las piezas se reporta el chunk_id del fragmento
+                    # original: sirve para trazar, no para emparejar.
                     "chunk_id": candidato.chunk_id,
                     "doc_id": candidato.doc_id,
                     "text": pieza,
@@ -156,7 +155,7 @@ def _rellenar(objetos: list, plantilla, faltan: int) -> list:
     """Completa una lista corta repitiendo el último elemento.
 
     El esquema exige exactamente 3 documentos y 10 fragmentos; una lista con
-    menos elementos es descartada por el evaluador automático. Solo se activa en
+    menos elementos se descarta en la evaluación. Solo se activa en
     consultas patológicas donde el índice devuelve muy pocos candidatos.
     """
     while faltan > 0:
@@ -207,7 +206,7 @@ def escribir_jsonl(resultados: list[dict], destino: Path) -> Path:
 
 
 def validar(destino: Path, n_consultas: int = 50) -> list[str]:
-    """Comprueba el archivo contra el esquema de la §9.3 antes de entregarlo."""
+    """Comprueba el formato del archivo antes de entregarlo."""
     problemas: list[str] = []
 
     with destino.open(encoding="utf-8") as fh:

@@ -9,7 +9,7 @@ donde el consecutivo cuenta las apariciones previas del par (fenómeno, código)
 en el orden de filas de la hoja. El resultado es `F1-CSET-001`.
 
 El campo `fuente` se toma literal del inventario porque es la clave con la que
-el jurado empareja los documentos contra el ground truth (especificación §10.2.1).
+se emparejan los documentos contra el ground truth, y no el `doc_id`.
 """
 
 from __future__ import annotations
