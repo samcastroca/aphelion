@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Artefactos intermedios del pipeline (regenerables)
+trabajo/
+
+# Entregable: se versiona el informe, no los artefactos generados
+entrega/base_vectorial/
+entrega/resultados.jsonl
+
+# Corpus provisto por ADL (3 GB)
+CORPUS CODEFEST AD ASTRA 2026/
+*.zip
