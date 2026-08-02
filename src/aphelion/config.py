@@ -18,6 +18,12 @@ ESPECIFICACION = DATOS / "CODEFEST_2026-1 Especificacion.pdf"
 # máquina donde se ejecute el proyecto.
 OCR_CACHE = DATOS / "ocr.jsonl"
 
+# Evaluación interna. Se versiona por la misma razón que el OCR: son juicios
+# emitidos a mano por cuatro personas, el artefacto más caro del proyecto y el
+# único que no se puede regenerar ejecutando nada.
+ANOTACION = DATOS / "anotacion"  # un CSV por anotador
+GROUND_TRUTH = DATOS / "ground_truth.jsonl"
+
 # Documentación. El informe se redacta en español y se exporta a PDF a la entrega.
 DOCS = RAIZ / "docs"
 
@@ -27,7 +33,6 @@ TEXTO_CRUDO = TRABAJO / "texto"  # un .json por documento extraído
 ONNX = TRABAJO / "onnx"  # modelos exportados para la GPU Radeon
 FRAGMENTOS = TRABAJO / "fragmentos.jsonl"
 CONSULTAS = TRABAJO / "consultas.jsonl"
-GROUND_TRUTH = TRABAJO / "ground_truth.jsonl"
 
 # Entregable
 ENTREGA = RAIZ / "entrega"

@@ -12,18 +12,96 @@ penalizaría injustamente.
 Produce un CSV por anotador, repartido de forma que cada consulta tenga un
 responsable y una fracción quede duplicada para medir acuerdo entre anotadores.
 
+Los CSV y el ground truth resultante viven en `datos/`, versionados: son juicios
+emitidos a mano por cuatro personas, el artefacto más caro del proyecto y el
+único que no se regenera ejecutando nada.
+
 Uso:
     uv run python scripts/05_pool_anotacion.py --anotadores 4 --top 20
+    # ... el equipo rellena la columna 'relevancia' en los CSV ...
+    uv run python scripts/05_pool_anotacion.py --consolidar
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 from pathlib import Path
 
 from aphelion import config, consultas as mod_consultas, encoders, recuperacion, vectores
+
+
+RELEVANTE = 2.0  # el umbral de la §10.2.2: 'parcial' no cuenta como documento
+
+
+def consolidar(origen: Path, destino: Path) -> int:
+    """Convierte los CSV anotados en el ground_truth.jsonl que lee 04_evaluar.
+
+    Cuando dos anotadores juzgan la misma consulta se toma el máximo, no el
+    promedio: si alguien reconoció un fragmento como relevante, lo es. Promediar
+    castigaría la evidencia encontrada por una sola persona.
+    """
+    if not origen.exists():
+        print(f"no existe {origen}. Genera el pool primero.")
+        return 1
+
+    csvs = sorted(origen.glob("*.csv"))
+    if not csvs:
+        print(f"no hay CSV en {origen}")
+        return 1
+
+    fragmentos: dict[str, dict[str, float]] = {}
+    documentos: dict[str, set[str]] = {}
+    juicios, sin_anotar = 0, 0
+
+    for ruta in csvs:
+        with ruta.open(encoding="utf-8-sig", newline="") as fh:
+            for fila in csv.DictReader(fh):
+                bruto = (fila.get("relevancia") or "").strip()
+                if not bruto:
+                    sin_anotar += 1
+                    continue
+                try:
+                    grado = float(bruto)
+                except ValueError:
+                    print(f"  {ruta.name}: relevancia ilegible {bruto!r}, se ignora")
+                    continue
+
+                juicios += 1
+                q = fila["query_id"]
+                previo = fragmentos.setdefault(q, {}).get(fila["chunk_id"], 0.0)
+                fragmentos[q][fila["chunk_id"]] = max(previo, grado)
+                if grado >= RELEVANTE:
+                    documentos.setdefault(q, set()).add(fila["doc_id"])
+
+    if not juicios:
+        print("ningún CSV tiene la columna 'relevancia' rellenada")
+        return 1
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    with destino.open("w", encoding="utf-8") as fh:
+        for q in sorted(fragmentos):
+            fh.write(
+                json.dumps(
+                    {
+                        "query_id": q,
+                        "fragmentos": fragmentos[q],
+                        "documentos": sorted(documentos.get(q, ())),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    print(f"{juicios:,} juicios sobre {len(fragmentos)} consultas -> {destino}")
+    if sin_anotar:
+        print(f"  {sin_anotar:,} filas siguen sin anotar")
+    faltan = 50 - len(fragmentos)
+    if faltan > 0:
+        print(f"  {faltan} consultas sin ningún juicio: quedarán fuera del promedio")
+    return 0
 
 
 def main() -> int:
@@ -31,8 +109,16 @@ def main() -> int:
     ap.add_argument("--top", type=int, default=20, help="candidatos por encoder")
     ap.add_argument("--anotadores", type=int, default=4)
     ap.add_argument("--solape", type=float, default=0.2, help="fracción duplicada")
-    ap.add_argument("--salida", type=Path, default=config.TRABAJO / "anotacion")
+    ap.add_argument("--salida", type=Path, default=config.ANOTACION)
+    ap.add_argument(
+        "--consolidar",
+        action="store_true",
+        help="convierte los CSV ya anotados en datos/ground_truth.jsonl",
+    )
     args = ap.parse_args()
+
+    if args.consolidar:
+        return consolidar(args.salida, config.GROUND_TRUTH)
 
     disponibles = vectores.encoders_disponibles()
     if not disponibles:
@@ -102,6 +188,7 @@ def main() -> int:
 
     print(f"\ntotal de juicios a emitir: {len(filas):,}")
     print("Rellena la columna 'relevancia': 0 = no relevante, 1 = parcial, 2 = relevante.")
+    print("Al terminar: uv run python scripts/05_pool_anotacion.py --consolidar")
     return 0
 
 
