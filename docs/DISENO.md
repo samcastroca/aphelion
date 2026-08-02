@@ -11,21 +11,28 @@ informe técnico entregable (máx. 8 páginas).
 Medido sobre los 1826 archivos del inventario oficial (`Indice_Datos_Codefest.xlsx`),
 verificado al 100% contra disco.
 
-| Formato | Archivos | Texto extraíble |
+| Formato | Archivos | Texto extraído |
 |---|---:|---:|
-| PDF | 760 | 87.5M caracteres (~21.9M tokens) |
-| JSON | 964 | 9.5M caracteres (~2.4M tokens) |
-| PBF | 73 | atributos de mapa |
-| CSV | 26 | filas tabulares |
-| XLSX | 6 | datasets AI Index |
-| Imagen | 9 | OCR si aplica |
-| **Total** | **1826** | **~97M caracteres (~24.3M tokens)** |
+| PDF | 759 | 131.6M caracteres |
+| CSV | 26 | 111.9M caracteres |
+| PBF | 73 | 7.3M caracteres (atributos de mapa) |
+| JSON | 954 | 4.7M caracteres |
+| XLSX | 6 | 1.4M caracteres |
+| Imagen / TXT | 9 | OCR / texto plano |
+| **Total** | **1826** | **~257M caracteres** |
 
-Estimación resultante: **~56.000 fragmentos** con chunks de 512 tokens y 15% de solape.
+Resultado medido tras ejecutar la extracción y la fragmentación: **149.571
+fragmentos, 72.3M tokens, mediana de 499 tokens**, sobre 1758 de los 1826
+documentos. Los CSV aportan 90.442 fragmentos (60% del índice), casi todos
+listados bibliográficos de PubMed ajenos a las consultas.
+
+> La estimación previa a la medición era de ~56.000 fragmentos y ~97M
+> caracteres. Se quedó corta en un factor de 2.7 porque subestimó el volumen
+> tabular de los CSV. Las cifras de arriba son las medidas, no las estimadas.
 
 ### Hechos que condicionan el diseño
 
-1. **53 PDFs sin capa de texto.** 48 de ellos son `ALERTAS_informes*.pdf`, informes
+1. **60 PDFs sin capa de texto.** 48 de ellos son `ALERTAS_informes*.pdf`, informes
    escaneados de la Defensoría del Pueblo (~1.000 páginas en total). Responden
    directamente a las preguntas q033–q050. Requieren OCR obligatoriamente.
 2. **Asimetría de idioma.** Las 50 consultas están en español; el corpus es
@@ -67,11 +74,11 @@ introduciría las consultas de evaluación dentro del corpus.
 | Formato | Herramienta | Notas |
 |---|---|---|
 | PDF con texto | PyMuPDF | Orden de lectura por bloques, no por posición cruda |
-| PDF escaneado | OCR (ver §4) | 53 archivos detectados por umbral <200 caracteres |
+| PDF escaneado | OCR (ver §4) | 60 archivos detectados por umbral <200 caracteres |
 | JSON artículo | parser propio | `title` + `body_paragraphs`/`body_text` al cuerpo; `url`, `date`, `authors`, `tags` a metadata |
 | JSON catálogo | parser propio | Cada registro de la lista es un fragmento independiente |
 | CSV / XLSX | pandas | Cada fila es una unidad, con `columna: valor` como contexto |
-| PBF | mapbox-vector-tile | **Un solo nivel de zoom**; atributos como `clave: valor` |
+| PBF | mapbox-vector-tile | Atributos como `clave: valor`, deduplicados **dentro** de cada tesela |
 | Imagen | OCR | Descartar si es portada sin texto informativo |
 
 ### Limpieza y normalización
@@ -88,24 +95,25 @@ Aplicada uniformemente tras la extracción:
 
 ## 4. OCR
 
-**Decisión: evaluación comparativa antes de comprometerse.** Se comparan
-`baidu/Unlimited-OCR` (3B, MIT, VLM con R-SWA) y Tesseract (`-l spa`) sobre una muestra
-de los informes escaneados.
+**Decisión: Tesseract (`-l spa`) a 200 dpi.** Se descartó `baidu/Unlimited-OCR`
+(3B, MIT, VLM con R-SWA), pese a su mejor manejo de layout, por dos razones en
+este orden:
 
-**Criterios de selección**, en orden de peso:
+1. **Es una arquitectura decoder y la §4.2 las prohíbe en la construcción del
+   índice.** El OCR pertenece al preprocesamiento (§2.1), donde la especificación
+   lo recomienda, y el argumento de que la prohibición no lo alcanza es
+   defendible. Pero el texto que produce termina indexado, y la sanción por una
+   lectura estricta es la exclusión, no una penalización. El riesgo asimétrico
+   decide: no hay ganancia de calidad que compense quedar fuera de la evaluación.
+2. **Ausencia de alucinación.** Un VLM que inventa texto introduce evidencia falsa
+   en el índice, que puede acabar presentada al jurado como respuesta. Tesseract,
+   al fallar, produce ruido evidente.
 
-1. **Ausencia de alucinación.** Un VLM que inventa texto introduce evidencia falsa en
-   el índice; Tesseract, al fallar, produce ruido evidente. Este criterio domina sobre
-   la calidad promedio.
-2. Fidelidad de diacríticos (tildes, ñ) — el corpus escaneado es español.
-3. Legibilidad de tablas y estructura.
-4. Velocidad — secundaria: son ~1.000 páginas y el proceso corre una sola vez.
-
-**Encuadre normativo:** el OCR pertenece al preprocesamiento (§2.1), que la
-especificación explícitamente recomienda. Las prohibiciones sobre arquitecturas decoder
-aplican a la generación de embeddings (§4.2) y al módulo de recuperación (§8.3), etapas
-en las que ningún modelo generativo interviene en este diseño. El uso de un VLM para
-OCR se declara explícitamente en el informe técnico.
+**Control de calidad.** Como un OCR que falla en silencio es peor que uno que
+revienta, sobre cada documento se miden tres señales y se revisa manualmente todo
+lo que dispare alguna: densidad de diacríticos (un texto español sin tildes ni
+eñes indica el paquete de idioma equivocado), proporción de caracteres no
+imprimibles y palabras por página.
 
 ---
 
@@ -182,7 +190,7 @@ distinto al de la consulta. Complementa la debilidad conocida de BGE-M3 en esa d
 **`IndexFlatIP` con vectores normalizados a norma unitaria**, un índice independiente
 por encoder.
 
-Con ~56k vectores, la búsqueda exhaustiva es exacta y se resuelve en milisegundos. Los
+Con ~150k vectores, la búsqueda exhaustiva es exacta y se resuelve en milisegundos. Los
 índices aproximados (IVF, HNSW) intercambian exactitud por una velocidad que este
 volumen no requiere, y en esta tarea la exactitud del ranking constituye la métrica.
 
@@ -269,8 +277,8 @@ recuperación como una lista ordenada adicional dentro del RRF.
 
 ```
 entrega/
+  generador.py                código fuente versionado; el resto es generado
   resultados.jsonl            50 líneas, q001–q050
-  generador.py                reproduce resultados.jsonl desde el índice
   informe_tecnico.pdf         máx. 8 páginas
   base_vectorial/
     encoder_bge-m3/
@@ -283,20 +291,109 @@ entrega/
       grafo.graphml           si aplica
 ```
 
+De esos cuatro elementos, `generador.py` es el único que es código fuente: vive
+versionado en `entrega/` porque es donde la §1.4 lo exige, y hay una sola copia.
+Los otros tres son artefactos que produce `scripts/empaquetar.py` y no se
+versionan.
+
 **Reproducibilidad.** `generador.py` carga los índices persistidos, lee el archivo de
 consultas y regenera `resultados.jsonl` sin reindexar. Semillas fijadas y versiones de
 modelo ancladas. La especificación excluye de la evaluación las entregas que no
 reproducen sus resultados; se trata como requisito eliminatorio, no como recomendación.
 
+**Por eso `generador.py` es autónomo.** El jurado recibe solo `entrega/`: un
+script que importe `src/aphelion` no arranca en sus manos, y eso basta para
+quedar excluido. El entregable es un único archivo sin dependencias del proyecto,
+escrito en inglés, cuyas únicas importaciones son las bibliotecas con las que se
+construyó el índice.
+
+El precio es tener la política de recuperación escrita dos veces:
+`aphelion.recuperacion` para iterar durante el desarrollo, y el entregable.
+`scripts/verificar_generador.py` corre ambas sobre el mismo índice y exige
+salidas idénticas, para que no puedan divergir en silencio. `empaquetar.py`
+ejecuta el generador desde dentro de `entrega/`, de modo que lo que se valida es
+el entregable resolviendo sus rutas como lo hará el evaluador.
+
 ---
 
-## 12. Riesgos identificados
+## 12. Contraste con la literatura
+
+Revisión de 39 fuentes sobre recuperación densa multilingüe (agosto 2026). Lo que
+confirma el diseño, lo que lo contradice y lo que revela como oportunidad.
+
+**Confirmado.** BGE-M3 supera a mE5-large en recuperación cross-lingual: 67,8
+frente a 65,4 nDCG@10 en MIRACL sobre 18 idiomas. La elección de encoder
+principal está bien fundada. 512 tokens es el valor por defecto defendible: un
+barrido de 2026 sobre siete estrategias lo situó primero, y un estudio de
+LlamaIndex sitúa el pico de fidelidad en 1024 — el rango 512–1024 es el
+razonable, y nuestra tensión NDCG/F1 es real.
+
+**La deduplicación tiene respaldo.** El filtrado de fragmentos redundantes reduce
+el índice entre un 25% y un 36% con caídas de recall inferiores al 6%, y la
+deduplicación byte-exacta antes de ensamblar el contexto no degrada la calidad de
+salida de forma medible. El cambio implementado va en la dirección correcta.
+
+**Contradicho: el solape puede no servir para nada.** Un análisis sistemático de
+enero de 2026 encontró que el solape entre fragmentos **no aporta beneficio
+medible** y solo incrementa el coste de indexación. Nuestro 15% cuesta
+aproximadamente un 15% más de vectores y de tiempo de codificación. Debe entrar
+en el barrido como candidato a eliminarse, no darse por bueno.
+
+**Debilitado: la justificación de RRF.** Se argumentó que RRF es inmune a la
+diferencia de escalas entre espacios vectoriales. Ese argumento vale para fusionar
+BM25 con recuperación densa, donde las escalas son incomparables. Aquí fusionamos
+**dos encoders densos**, ambos con similitud coseno en el mismo rango: el problema
+que RRF resuelve apenas existe. Bruch et al. (2022) muestran que la combinación
+convexa de puntuaciones normalizadas **supera a RRF en dominio** cuando hay
+etiquetas de relevancia disponibles. En cuanto exista el ground truth interno,
+CombSUM normalizado debe compararse contra RRF en lugar de asumirlo. El valor
+`k₀ = 60` proviene de corpus a escala TREC; para colecciones menores se recomienda
+entre 10 y 20, así que también entra al barrido.
+
+**Oportunidad no explotada: las cabezas sparse de BGE-M3.** El modelo produce
+representaciones densas, sparse y multi-vector en una sola pasada. En MIRACL, la
+cabeza densa sola rinde 67,8 y **la combinación de las tres alcanza 70,0**. El
+diseño ya invocaba esa capacidad como justificación para elegir BGE-M3
+—«sensibilidad léxica sin índice adicional»— pero el código solo usa la salida
+densa: la ventaja está enunciada y no implementada. Recuperarla no viola la §4.2,
+porque ninguna de las tres cabezas es un decoder, y aporta exactamente lo que este
+corpus necesita: las consultas están llenas de siglas y nombres propios (NBQR,
+ASAT, Chocó, Arauca) que la similitud densa diluye.
+
+### Codificación en hardware AMD
+
+La máquina de desarrollo tiene una Radeon RX 6650 XT (gfx1032, RDNA2, 8 GB) y un
+Ryzen 5 3400G de cuatro núcleos. De las cuatro rutas posibles a esa GPU, tres
+están cerradas:
+
+| Ruta | Estado |
+|---|---|
+| CUDA | No aplica: la GPU es AMD |
+| ROCm en Windows o WSL2 | gfx1032 no está en la matriz de soporte, y AMD declinó admitir `HSA_OVERRIDE_GFX_VERSION` en Windows |
+| `torch-directml` | Degradaría torch de 2.13 a 2.4 |
+| **ONNX Runtime + DirectML** | **Funciona.** 5,0 frag/s frente a 0,27 en CPU |
+
+Se descarta `optimum` como intermediario: exige `transformers<5` y el proyecto
+está en 5.14.1. La exportación con `torch.onnx.export` no necesita esa capa.
+
+**El pooling se hornea dentro del grafo ONNX.** BGE-M3 usa el token CLS y E5
+promedia con la máscara de atención. Confundirlos no produce ningún error: baja
+el coseno contra la referencia de 0,999999 a 0,81, una degradación que solo
+aparecería como recuperación mediocre. Al generarlo desde
+`config.ENCODERS[...]["pooling"]`, el lado de Python no puede equivocarse.
+
+---
+
+## 13. Riesgos identificados
 
 | Riesgo | Mitigación |
 |---|---|
-| Alucinación del OCR sobre escaneos degradados | Comparación previa contra Tesseract; el criterio de fidelidad domina sobre el de calidad promedio |
+| El entregable no arranca fuera del repositorio → exclusión (§1.4) | `generador.py` vive en `entrega/` y es autónomo; `empaquetar.py` lo ejecuta desde ahí, con las rutas que verá el jurado |
+| El OCR por VLM cae bajo la prohibición de decoders (§4.2) → exclusión | Se usa Tesseract; el VLM queda descartado y la decisión se declara en el informe |
+| OCR que falla en silencio e inyecta ruido en el índice | Tres señales por documento (diacríticos, no imprimibles, palabras/página) y revisión manual de lo que las dispare |
+| Caché de embeddings reutilizada entre corridas distintas → índice desalineado | La ruta de caché lleva la huella del archivo de fragmentos; además se verifica el tamaño de cada bloque al cargarlo |
 | Colisión de nombres en `fuente` (59 casos) | Se reporta el nombre estandarizado literal; la ruta se conserva aparte para trazabilidad |
 | Sesgo del ground truth interno hacia lo que el sistema ya recupera | Pool generado por unión de dos configuraciones distintas |
 | Tensión NDCG@10 / F1@3 en el tamaño de chunk | Barrido empírico sobre el conjunto interno, no elección a priori |
-| Entorno: PyTorch no soporta Python 3.14 | Proyecto fijado a Python 3.12 mediante `uv` |
-| Indexación en máquina sin GPU | Pipeline agnóstico de dispositivo, reanudable por lotes |
+| Indexación sin GPU: 0,27 frag/s en el Ryzen 5 3400G, 65 h por encoder | **Resuelto.** ONNX Runtime sobre DirectML aprovecha la Radeon RX 6650 XT: 5,0 frag/s, unas 3,5 h por encoder |
+| El backend ONNX podría divergir del PyTorch con el que el jurado codifica las consultas | `onnx_dml.verificar()` compara ambos antes de indexar y aborta si el coseno baja de 0,999. Medido: 0,99974 |

@@ -5,12 +5,16 @@ __pycache__/
 # Artefactos intermedios del pipeline (regenerables)
 trabajo/
 
-# Entregable: se versiona el informe, no los artefactos generados.
-# El indice completo pesa ~612 MB y no cabe en GitHub; para probar el
-# pipeline sin reindexar esta demo/, con un indice reducido de 11 MB.
-entrega/base_vectorial/
-entrega/resultados.jsonl
+# Los artefactos de la entrega se generan con scripts/empaquetar.py y no se
+# versionan: el índice completo pesa ~612 MB y no cabe en GitHub. Para probar el
+# pipeline sin reindexar está demo/, con un índice reducido de 11 MB.
+#
+# generador.py es la excepción: no es un artefacto generado sino código fuente,
+# y la §1.4 exige que viva exactamente aquí.
+entrega/*
+!entrega/generador.py
 
-# Corpus provisto por ADL (3 GB)
-CORPUS CODEFEST AD ASTRA 2026/
+# Corpus provisto por ADL (3 GB). El inventario, las preguntas y la
+# especificación sí se versionan: sin ellos el pipeline no arranca.
+datos/CORPUS CODEFEST AD ASTRA 2026/
 *.zip

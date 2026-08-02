@@ -4,13 +4,27 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]
 
-CORPUS = RAIZ / "CORPUS CODEFEST AD ASTRA 2026"
-INVENTARIO = RAIZ / "Indice_Datos_Codefest.xlsx"
-PREGUNTAS_PDF = RAIZ / "Extracto_Preguntas_50_v2.pdf"
+# Insumos provistos por ADL. El corpus (3 GB) no se versiona; el inventario, las
+# preguntas y la especificación sí, porque el pipeline no arranca sin ellos.
+DATOS = RAIZ / "datos"
+CORPUS = DATOS / "CORPUS CODEFEST AD ASTRA 2026"
+INVENTARIO = DATOS / "Indice_Datos_Codefest.xlsx"
+PREGUNTAS_PDF = DATOS / "Extracto_Preguntas_50_v2.pdf"
+ESPECIFICACION = DATOS / "CODEFEST_2026-1 Especificacion.pdf"
+
+# Texto reconocido de los PDFs escaneados. Se versiona —pesa 1,7 MB— porque es
+# el único artefacto del pipeline que depende de software externo (Tesseract con
+# su paquete de español) y cuesta horas de CPU. Cachearlo evita repetirlo en cada
+# máquina donde se ejecute el proyecto.
+OCR_CACHE = DATOS / "ocr.jsonl"
+
+# Documentación. El informe se redacta en español y se exporta a PDF a la entrega.
+DOCS = RAIZ / "docs"
 
 # Artefactos intermedios (no se versionan)
 TRABAJO = RAIZ / "trabajo"
 TEXTO_CRUDO = TRABAJO / "texto"  # un .json por documento extraído
+ONNX = TRABAJO / "onnx"  # modelos exportados para la GPU Radeon
 FRAGMENTOS = TRABAJO / "fragmentos.jsonl"
 CONSULTAS = TRABAJO / "consultas.jsonl"
 GROUND_TRUTH = TRABAJO / "ground_truth.jsonl"
@@ -32,6 +46,10 @@ ENCODERS = {
         "max_tokens": 8192,
         "prefijo_consulta": "",
         "prefijo_pasaje": "",
+        # BGE-M3 toma el token CLS. Usar mean pooling por descuido baja el coseno
+        # contra la referencia de 0.999999 a 0.81: parece un problema numérico y
+        # es un error de pooling.
+        "pooling": "cls",
     },
     "me5-large": {
         "modelo": "intfloat/multilingual-e5-large",
@@ -40,6 +58,9 @@ ENCODERS = {
         # E5 se entrenó con prefijos asimétricos; omitirlos degrada la recuperación.
         "prefijo_consulta": "query: ",
         "prefijo_pasaje": "passage: ",
+        # E5 promedia los tokens con la máscara de atención. No es intercambiable
+        # con el CLS de BGE-M3.
+        "pooling": "mean",
     },
 }
 
@@ -51,6 +72,21 @@ CHUNK_TOKENS = 512
 CHUNK_SOLAPE = 0.15
 MIN_TOKENS_FRAGMENTO = 10  # por debajo son restos de tabla, no contenido
 MAX_PALABRAS_FRAGMENTO = 250  # límite de la especificación, §9.2
+
+# Tope de fragmentos por documento tabular. Medido: 30 archivos CSV/XLSX aportan
+# 91.412 de los 149.571 fragmentos (61% del índice), y tres exportaciones
+# bibliográficas de PubMed solas ocupan el 51,5%. Son listados de referencias
+# biomédicas ajenas a las 50 consultas: consumen más de la mitad del tiempo de
+# codificación y compiten en cada búsqueda contra la evidencia útil.
+#
+# El tope se aplica solo a formatos tabulares, donde cada fila es un registro
+# independiente y el valor marginal de la fila 3.000 es nulo. Los PDF largos y
+# legítimos —una ley de 1.960 fragmentos— no se tocan.
+#
+# No se excluyen los archivos: el emparejamiento del F1@3 es por `fuente`
+# (§10.2.1), así que el documento debe seguir siendo alcanzable.
+MAX_FRAGMENTOS_TABULARES = 400
+FORMATOS_TABULARES = frozenset({"csv", "xlsx"})
 
 # --- Recuperación ---------------------------------------------------------
 

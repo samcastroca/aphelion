@@ -1,7 +1,7 @@
 """Construcción, persistencia y consulta del índice FAISS.
 
 `IndexFlatIP` sobre vectores normalizados: búsqueda exacta y equivalente a
-similitud coseno. Con ~56k vectores no hay razón para un índice aproximado — IVF
+similitud coseno. Con ~150k vectores no hay razón para un índice aproximado — IVF
 y HNSW cambian exactitud por una velocidad que este volumen no necesita, y aquí
 la exactitud del ranking es la métrica evaluada.
 

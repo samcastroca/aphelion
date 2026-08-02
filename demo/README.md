@@ -11,13 +11,18 @@ archivo.
 
 ```bash
 uv sync
-uv run python generador.py --base demo/base_vectorial --salida trabajo/mi_prueba.jsonl
+uv run python entrega/generador.py \
+  --index-root demo/base_vectorial \
+  --output trabajo/mi_prueba.jsonl
 ```
 
-Debe imprimir `formato validado: esquema correcto` y producir 50 líneas. El
-resultado es byte-idéntico a `resultados_muestra.jsonl`, así que sirve para
-comprobar que un cambio no rompió nada: si el archivo generado difiere y no
-tocaste la recuperación, algo se rompió.
+Debe imprimir `schema validated: format is correct` y producir 50 líneas.
+
+Para contrastar además el entregable contra el paquete de desarrollo:
+
+```bash
+uv run python scripts/verificar_generador.py
+```
 
 La primera ejecución descarga BGE-M3 (~2 GB) desde HuggingFace. Es lo único que
 no está incluido.
@@ -27,9 +32,8 @@ no está incluido.
 | Archivo | Contenido |
 |---|---|
 | `base_vectorial/encoder_bge-m3/index.faiss` | 1168 vectores de 1024 dimensiones |
-| `base_vectorial/encoder_bge-m3/metadata.jsonl` | metadata de esos fragmentos |
-| `fragmentos_muestra.jsonl` | los mismos fragmentos antes de codificar |
-| `resultados_muestra.jsonl` | salida de referencia para las 50 consultas |
+| `base_vectorial/encoder_bge-m3/metadata.jsonl` | metadata de esos fragmentos, que es también su texto de origen |
+| `resultados_muestra.jsonl` | salida de referencia, anterior a la deduplicación |
 
 ## Cómo se construyó la muestra
 
@@ -38,9 +42,9 @@ fragmentos sueltos: 180 documentos con hasta 12 fragmentos cada uno. Mantener lo
 documentos enteros permite que la agregación a nivel documento se comporte como
 en el índice real.
 
-Se excluyeron los cinco CSV de PubMed, que aportan el 56% de los fragmentos del
-corpus completo con referencias bibliográficas biomédicas ajenas a las 50
-consultas y habrían dominado la muestra.
+Se excluyeron los CSV de PubMed, que aportan el 60% de los fragmentos del corpus
+completo con referencias bibliográficas biomédicas ajenas a las 50 consultas y
+habrían dominado la muestra.
 
 **Esta demo no sirve para medir calidad de recuperación** — es el 0.8% del corpus.
 Sirve para verificar que el pipeline corre, que el formato de salida valida y que
