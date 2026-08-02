@@ -5,7 +5,9 @@ __pycache__/
 # Artefactos intermedios del pipeline (regenerables)
 trabajo/
 
-# Entregable: se versiona el informe, no los artefactos generados
+# Entregable: se versiona el informe, no los artefactos generados.
+# El indice completo pesa ~612 MB y no cabe en GitHub; para probar el
+# pipeline sin reindexar esta demo/, con un indice reducido de 11 MB.
 entrega/base_vectorial/
 entrega/resultados.jsonl
 
