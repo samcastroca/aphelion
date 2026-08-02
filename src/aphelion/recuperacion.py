@@ -82,6 +82,42 @@ def fusionar_rrf(
     return sorted(acumulado.values(), key=lambda c: c.puntaje, reverse=True)
 
 
+def fusionar_combsum(
+    rankings: dict[str, list[tuple[dict, float]]],
+) -> list[Candidato]:
+    """Suma las similitudes de cada fragmento en los índices donde aparece.
+
+    La alternativa a RRF. Conserva la magnitud de la similitud en lugar de
+    reducirla a una posición, lo que en teoría aporta información: la diferencia
+    entre coseno 0.9 y 0.5 se pierde al ordenar. Funciona aquí porque los dos
+    encoders devuelven coseno en el mismo rango; con un ranker léxico al lado no
+    sería comparable sin normalizar.
+
+    Un fragmento ausente del top-k de un índice suma cero por ese índice.
+    """
+    acumulado: dict[str, Candidato] = {}
+
+    for encoder, ranking in rankings.items():
+        for posicion, (meta, similitud) in enumerate(ranking, start=1):
+            chunk_id = meta["chunk_id"]
+            candidato = acumulado.get(chunk_id)
+            if candidato is None:
+                candidato = Candidato(
+                    chunk_id=chunk_id,
+                    doc_id=meta["doc_id"],
+                    texto=meta["texto"],
+                    fuente=meta["fuente"],
+                    fenomeno=meta.get("fenomeno", 0),
+                    puntaje=0.0,
+                    posiciones={},
+                )
+                acumulado[chunk_id] = candidato
+            candidato.puntaje += similitud
+            candidato.posiciones[encoder] = posicion
+
+    return sorted(acumulado.values(), key=lambda c: c.puntaje, reverse=True)
+
+
 def aplicar_boost_fenomeno(
     candidatos: list[Candidato],
     fenomeno: int | None,
@@ -224,20 +260,36 @@ class Recuperador:
             self._encoders[nombre] = encoders.cargar(nombre)
         return self._encoders[nombre]
 
-    def recuperar(
+    def buscar(
+        self, consulta: Consulta, candidatos_por_indice: int | None = None
+    ) -> dict[str, list[tuple[dict, float]]]:
+        """La parte cara: codificar la consulta y buscar en cada índice.
+
+        Está separada del resto porque no depende de ningún hiperparámetro de
+        fusión. El barrido busca una vez y reordena cien veces.
+        """
+        k = candidatos_por_indice or self.candidatos_por_indice
+        rankings: dict[str, list[tuple[dict, float]]] = {}
+        for nombre, indice in self.indices.items():
+            vector = self._encoder(nombre).codificar_consultas([consulta.texto])[0]
+            rankings[nombre] = [
+                (indice.meta(pos), sim) for pos, sim in indice.buscar(vector, k)
+            ]
+        return rankings
+
+    def ordenar(
         self,
+        rankings: dict[str, list[tuple[dict, float]]],
         consulta: Consulta,
         top_fragmentos: int = config.TOP_FRAGMENTOS,
         top_documentos: int = config.TOP_DOCUMENTOS,
+        fusion: str = "rrf",
     ) -> Resultado:
-        rankings: dict[str, list[tuple[dict, float]]] = {}
-
-        for nombre, indice in self.indices.items():
-            vector = self._encoder(nombre).codificar_consultas([consulta.texto])[0]
-            aciertos = indice.buscar(vector, self.candidatos_por_indice)
-            rankings[nombre] = [(indice.meta(pos), sim) for pos, sim in aciertos]
-
-        candidatos = fusionar_rrf(rankings, self.k0)
+        """La parte barata: fusionar, realzar, diversificar y agregar."""
+        if fusion == "combsum":
+            candidatos = fusionar_combsum(rankings)
+        else:
+            candidatos = fusionar_rrf(rankings, self.k0)
         candidatos = aplicar_boost_fenomeno(candidatos, consulta.fenomeno, self.boost)
 
         # La deduplicación se aplica solo a la lista de fragmentos. La agregación
@@ -249,6 +301,15 @@ class Recuperador:
         documentos = agregar_a_documentos(candidatos, top_documentos)
 
         return Resultado(consulta.query_id, documentos, fragmentos)
+
+    def recuperar(
+        self,
+        consulta: Consulta,
+        top_fragmentos: int = config.TOP_FRAGMENTOS,
+        top_documentos: int = config.TOP_DOCUMENTOS,
+    ) -> Resultado:
+        rankings = self.buscar(consulta)
+        return self.ordenar(rankings, consulta, top_fragmentos, top_documentos)
 
 
 def cargar_indices(

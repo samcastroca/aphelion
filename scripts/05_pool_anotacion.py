@@ -13,8 +13,14 @@ Produce un CSV por anotador, repartido de forma que cada consulta tenga un
 responsable y una fracción quede duplicada para medir acuerdo entre anotadores.
 
 Los CSV y el ground truth resultante viven en `datos/`, versionados: son juicios
-emitidos a mano por cuatro personas, el artefacto más caro del proyecto y el
-único que no se regenera ejecutando nada.
+emitidos a mano, el artefacto más caro del proyecto y el único que no se
+regenera ejecutando nada.
+
+Sobre quién anota: cualquiera que lea la consulta y el fragmento puede rellenar
+la columna, incluido un asistente. Lo que no se puede saltar es el control: el
+solape entre anotadores está para medir el acuerdo, y si parte del pool lo juzga
+un modelo, ese solape debe incluir a personas. Un ground truth que nadie
+contrastó mide el criterio de quien anotó, no la calidad del sistema.
 
 Uso:
     uv run python scripts/05_pool_anotacion.py --anotadores 4 --top 20
@@ -210,7 +216,10 @@ def main() -> int:
                         "fuente": meta["fuente"],
                         "chunk_id": meta["chunk_id"],
                         "idioma": meta.get("idioma", ""),
-                        "texto": meta["texto"][:1200],
+                        # Sin truncar: un fragmento de 512 tokens pasa de 2.000
+                        # caracteres, y juzgar relevancia sobre un texto cortado
+                        # produce juicios sobre algo que no es lo que se indexó.
+                        "texto": meta["texto"],
                         # columnas a rellenar por el anotador
                         "relevancia": "",  # 0 = no, 1 = parcial, 2 = relevante
                         "notas": "",
