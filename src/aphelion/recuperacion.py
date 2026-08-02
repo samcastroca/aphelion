@@ -103,6 +103,30 @@ def aplicar_boost_fenomeno(
     return sorted(candidatos, key=lambda c: c.puntaje, reverse=True)
 
 
+def sin_duplicados(candidatos: list[Candidato]) -> list[Candidato]:
+    """Elimina fragmentos con texto repetido, conservando el mejor puntuado.
+
+    El corpus tiene 4.445 fragmentos (3%) con texto exactamente idéntico: mismas
+    tablas en informes distintos, mismos encabezados institucionales. Dos copias
+    del mismo texto en el top-10 tienen la misma relevancia y gastan dos de las
+    diez posiciones que evalúa NDCG@10 para informar una sola vez.
+
+    Se compara sobre el texto normalizado por espacios, de modo que también caen
+    las variantes que solo difieren en el salto de línea.
+    """
+    vistos: set[str] = set()
+    unicos: list[Candidato] = []
+
+    for candidato in candidatos:
+        clave = " ".join(candidato.texto.split()).casefold()
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        unicos.append(candidato)
+
+    return unicos
+
+
 def diversificar(
     candidatos: list[Candidato],
     limite: int,
@@ -216,7 +240,12 @@ class Recuperador:
         candidatos = fusionar_rrf(rankings, self.k0)
         candidatos = aplicar_boost_fenomeno(candidatos, consulta.fenomeno, self.boost)
 
-        fragmentos = diversificar(candidatos, top_fragmentos, self.max_por_doc)
+        # La deduplicación se aplica solo a la lista de fragmentos. La agregación
+        # a documento usa el conjunto completo: dos documentos distintos pueden
+        # compartir un texto, y descartar uno lo volvería inalcanzable.
+        fragmentos = diversificar(
+            sin_duplicados(candidatos), top_fragmentos, self.max_por_doc
+        )
         documentos = agregar_a_documentos(candidatos, top_documentos)
 
         return Resultado(consulta.query_id, documentos, fragmentos)
