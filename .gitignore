@@ -9,10 +9,14 @@ trabajo/
 # versionan: el índice completo pesa ~612 MB y no cabe en GitHub. Para probar el
 # pipeline sin reindexar está demo/, con un índice reducido de 11 MB.
 #
-# generador.py es la excepción: no es un artefacto generado sino código fuente,
-# y la §1.4 exige que viva exactamente aquí.
+# Se versionan las dos excepciones que caben: generador.py, que no es un
+# artefacto generado sino código fuente y que la §1.4 exige que viva exactamente
+# aquí, y resultados.jsonl, que son 0,8 MB y es el entregable que se evalúa. Lo
+# que queda fuera es la base vectorial (index.faiss y metadata.jsonl, ~393 MB por
+# encoder), que supera el límite de 100 MB por archivo de GitHub.
 entrega/*
 !entrega/generador.py
+!entrega/resultados.jsonl
 
 # Corpus provisto por ADL (3 GB). El inventario, las preguntas y la
 # especificación sí se versionan: sin ellos el pipeline no arranca.
