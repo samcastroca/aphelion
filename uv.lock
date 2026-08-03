@@ -75,6 +75,7 @@ dependencies = [
     { name = "pysbd" },
     { name = "pytesseract" },
     { name = "sentence-transformers" },
+    { name = "tokenizers" },
     { name = "tqdm" },
     { name = "transformers" },
 ]
@@ -111,6 +112,7 @@ requires-dist = [
     { name = "pysbd", specifier = ">=0.3.4" },
     { name = "pytesseract", specifier = ">=0.3.13" },
     { name = "sentence-transformers", specifier = ">=5.6.1" },
+    { name = "tokenizers", specifier = ">=0.22.2" },
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.13.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "aphelion", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.13.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "aphelion", extra = "cuda" } },
     { name = "tqdm", specifier = ">=4.70.0" },
