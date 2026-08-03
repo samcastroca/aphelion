@@ -78,6 +78,37 @@ function Paso($texto) { Write-Host "`n=== $texto ===" -ForegroundColor Cyan }
 function Aviso($texto) { Write-Host "  ! $texto" -ForegroundColor Yellow }
 function Bien($texto) { Write-Host "  $texto" -ForegroundColor Green }
 
+# Extras de uv que le corresponden a esta máquina. Se rellena al detectar la GPU
+# y viaja en *todas* las llamadas a uv, no solo en el sync: `uv run` sincroniza
+# contra el conjunto que se le pida, así que un `uv run` sin --extra cuda
+# desinstala el torch de CUDA que el sync acababa de instalar.
+$script:Extras = @()
+
+function CorrerUv {
+    <#
+        Llama a uv sin que su salida por stderr mate el guion.
+
+        Windows PowerShell 5.1 convierte en error terminante cualquier escritura
+        a stderr de un ejecutable cuando $ErrorActionPreference es Stop, y uv
+        informa por ahí de lo que instala y desinstala. Quien decide si hubo
+        fallo es el código de salida, y eso es lo que se mira después.
+
+        Asignar el resultado captura la salida; no asignarlo la deja pasar en
+        directo, que es lo que quiere el pipeline.
+    #>
+    param([Parameter(ValueFromRemainingArguments = $true)]$argumentos)
+    $previo = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # Por la ruta del ejecutable: una función llamada 'uv' se llamaría a sí
+        # misma, porque PowerShell no distingue mayúsculas en los nombres.
+        & (Get-Command uv -CommandType Application | Select-Object -First 1).Source @argumentos 2>&1 |
+            ForEach-Object { "$_" }
+    } finally {
+        $ErrorActionPreference = $previo
+    }
+}
+
 function Leer($pregunta, $porDefecto) {
     # Sin consola —una tarea programada, una tubería— Read-Host no lee nada. Que
     # devuelva el valor por defecto y no reviente: sin parámetros el guion tiene
@@ -110,7 +141,7 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         throw "uv no quedó en el PATH. Abre una terminal nueva y repite."
     }
 }
-Bien (uv --version)
+Bien (CorrerUv --version)
 
 Paso "GPU"
 # Se detecta antes que nada porque decide dos cosas: de qué índice sale torch, y
@@ -297,21 +328,23 @@ if ($Reparto) {
 }
 
 Paso "Dependencias"
-# El extra decide de qué índice sale torch. Instalarlo aparte no serviría: el
-# `uv run` siguiente vuelve a alinear el entorno con el lock y lo reemplazaría.
+# El extra decide de qué índice sale torch, y tiene que ir en todas las llamadas
+# a uv: `uv run` sincroniza contra lo que se le pida, así que uno sin --extra
+# cuda desinstala el torch de CUDA que el sync acaba de poner.
 if ($nvidia) {
-    uv sync --extra cuda
+    $script:Extras = @("--extra", "cuda")
 } elseif ($radeon) {
-    uv sync --extra amd
-} else {
-    uv sync
+    $script:Extras = @("--extra", "amd")
 }
+
+CorrerUv sync @script:Extras
 if ($LASTEXITCODE -ne 0) { throw "uv sync falló" }
 
 if ($nvidia) {
-    $cuda = uv run python -c "import torch; print(torch.cuda.is_available())" 2>$null
-    if ($cuda -eq "True") {
-        Bien (uv run python -c "import torch; print('torch', torch.__version__, torch.cuda.get_device_name(0))")
+    $torch = CorrerUv run @script:Extras python -c "import torch; print('GPU', torch.cuda.is_available(), torch.__version__, torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"
+    $linea = ($torch | Where-Object { $_ -like 'GPU *' } | Select-Object -First 1)
+    if ($linea -like 'GPU True*') {
+        Bien ($linea -replace '^GPU True ', 'torch ')
     } else {
         Aviso "PyTorch no ve la GPU pese a la build CUDA. Revisa el driver."
     }
@@ -341,7 +374,7 @@ if ($SoloEntorno) {
 Paso "Pipeline"
 # Los nombres de encoder no se validan aquí: los define config.ENCODERS y es
 # pipeline.py quien los comprueba, antes de tocar nada.
-$argumentos = @("run", "python", "scripts/pipeline.py")
+$argumentos = @("run") + $script:Extras + @("python", "scripts/pipeline.py")
 if ($Desde) { $argumentos += @("--desde", $Desde) }
 if ($Encoders) { $argumentos += @("--encoders", ($Encoders -join ",")) }
 if ($Backend) { $argumentos += @("--backend", $Backend) }
@@ -350,7 +383,7 @@ if ($SinOcr) { $argumentos += "--sin-ocr" }
 if ($Forzar) { $argumentos += "--forzar" }
 if ($Reparto) { $argumentos += @("--reparto", $Reparto) }
 
-& uv @argumentos
+CorrerUv @argumentos
 $codigo = $LASTEXITCODE
 
 if ($Reparto -and $codigo -eq 0) {
