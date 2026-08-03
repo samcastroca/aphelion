@@ -29,6 +29,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 import time
@@ -164,6 +165,12 @@ def comprobar_entorno(
             import onnxruntime  # noqa: F401
         except ImportError:
             avisos.append("falta onnxruntime-directml: uv sync --extra amd")
+
+    # No es un aviso que aborte —el PDF se exporta a mano y el pipeline ya no
+    # muere por él— pero conviene saberlo ahora y no al final: pandoc necesita
+    # además un motor de LaTeX para producir un PDF.
+    if shutil.which("pandoc") is None:
+        print("  nota: sin pandoc, informe_tecnico.pdf habrá que exportarlo a mano")
 
     if not sin_ocr:
         from aphelion.ingesta import ocr

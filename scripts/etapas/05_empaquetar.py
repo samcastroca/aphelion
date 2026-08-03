@@ -144,14 +144,28 @@ def main() -> int:
             return codigo
 
     print(f"\n-> {destino}")
+
+    # Lo que esta etapa produce y por tanto responde: si falta, es un fallo suyo.
     faltan = [
         nombre
-        for nombre in ("resultados.jsonl", "generador.py", "informe_tecnico.pdf")
+        for nombre in ("resultados.jsonl", "generador.py")
         if not (destino / nombre).exists()
     ]
     if faltan:
-        print(f"pendiente: {', '.join(faltan)}")
+        print(f"falta {', '.join(faltan)}: la entrega no está completa")
         return 1
+
+    # El PDF no. Depende de pandoc y de un motor de LaTeX, que pueden no estar, y
+    # se exporta a mano en un minuto. Tumbar aquí el pipeline por eso costaría la
+    # etapa siguiente —la que comprueba lo único eliminatorio del reto— después
+    # de horas de codificación, que es exactamente el fallo que no nos podemos
+    # permitir. Se avisa fuerte y se sigue.
+    if not INFORME_PDF.exists():
+        print()
+        print(f"  PENDIENTE: falta {INFORME_PDF.name}, y la §1.4 lo exige.")
+        print(f"  Expórtalo a mano desde {INFORME_MD} (máximo 8 páginas).")
+        print("  Todo lo demás de la entrega está listo.")
+        return 0
 
     print("entrega completa")
     return 0
