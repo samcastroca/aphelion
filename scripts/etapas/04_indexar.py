@@ -166,7 +166,25 @@ def main() -> int:
         metavar="A:B",
         help="codifica solo el tramo A%%-B%% de los bloques y no construye el índice",
     )
+    ap.add_argument(
+        "--huella",
+        action="store_true",
+        help="imprime la huella de los fragmentos y sale, para comparar entre máquinas",
+    )
     args = ap.parse_args()
+
+    # Antes que nada y sin cargar nada: comparar esta línea entre las máquinas
+    # que se reparten el trabajo cuesta un segundo y decide si sus vectores van a
+    # encajar. Si no coincide, sobra seguir.
+    if args.huella:
+        if not args.fragmentos.exists():
+            print(f"No existe {args.fragmentos}")
+            return 1
+        fragmentos = leer_fragmentos(args.fragmentos)
+        print(f"huella:   {huella(args.fragmentos)}")
+        print(f"fragmentos: {len(fragmentos):,}")
+        print(f"bloques:  {numero_de_bloques(len(fragmentos))} de {FRAG_POR_BLOQUE}")
+        return 0
 
     # Lo primero, antes de leer fragmentos y de cargar el modelo: un tramo mal
     # escrito no puede costar los minutos que tarda el encoder en abrirse.

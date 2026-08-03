@@ -251,8 +251,8 @@ uv run python scripts/pipeline.py
 De vuelta solo hace falta `entrega/` (índices + `resultados.jsonl`), por Drive o
 similar. `generador.py` ya está en el repo, así que no viaja.
 
-**Si no tiene el corpus**, mándale `trabajo/fragmentos.jsonl` (285 MB) y que
-arranque en la etapa de indexado. Ojo con el orden: ese archivo tiene que
+**Si alguien no tiene el corpus**, mándale `trabajo/fragmentos.jsonl` (285 MB) y
+que arranque en la etapa de indexado. Ojo con el orden: ese archivo tiene que
 generarse **después** del OCR, o irá sin los escaneados.
 
 ```bash
@@ -284,18 +284,27 @@ potente se queda el grande. A mano es lo mismo:
 .\ejecutar.ps1 -Reparto 75:100    # en la tercera
 ```
 
-Con `-Reparto` la máquina no extrae, no fragmenta y no empaqueta: solo codifica
-sus bloques y se detiene. No necesita el corpus ni Tesseract.
+Con `-Reparto` la máquina prepara los fragmentos si no los tiene, codifica sus
+bloques y se detiene: no empaqueta, porque el índice no está completo hasta juntar
+los tramos de todas.
 
-**Las tres tienen que partir del mismo `trabajo/fragmentos.jsonl`, copiado y no
-regenerado.** Basta con que a una le falte un documento por reconocer para que su
-bloque 7 contenga otros textos, y sus vectores no encajarían con los de nadie. El
-script imprime la huella del archivo al arrancar; si no coincide en las tres,
-paren ahí.
+**Cada máquina genera su propio `fragmentos.jsonl` y no hay que mover 285 MB.**
+Sale idéntico en todas: el orden viene de `sorted(glob)` y de `pool.map`, que lo
+conserva; la limpieza y la detección de idioma son funciones puras del texto; la
+ruta que se guarda es relativa, no absoluta; y el texto de los escaneados sale de
+`data/ocr.jsonl`, que viaja versionado. Lo único que las separaría es que una se
+saltara el OCR. Compruébalo antes de gastar la GPU:
 
-Al terminar, cada una manda su carpeta de `.npy` a la coordinadora. Se juntan
-todos en la misma ruta —`trabajo/embeddings/<encoder>-<backend>/<huella>/`— y una
-corrida normal los encuentra cacheados y arma el índice en segundos:
+```bash
+uv run python scripts/etapas/04_indexar.py --huella
+```
+
+Un segundo, sin cargar ningún modelo. Si la huella no coincide en las tres, paren
+ahí: sus vectores no encajarían.
+
+Al terminar, cada una manda su carpeta de `.npy` a la que arma el índice. Se
+juntan todos en la misma ruta —`trabajo/embeddings/<encoder>-<backend>/<huella>/`—
+y una corrida normal los encuentra cacheados y arma el índice en segundos:
 
 ```bash
 uv run python scripts/pipeline.py --desde 04_indexar:bge-m3
@@ -306,8 +315,7 @@ falta alguno lo codifica ella misma, que es lo correcto, pero conviene verlo
 antes de que la GPU se ponga a rellenar un tramo que nunca llegó.
 
 Cuánto se transporta: unos 258 MB de vectores por encoder (63.000 fragmentos ×
-1024 dimensiones × 4 bytes), o sea ~86 MB por máquina y encoder. Antes hay que
-mandarles los 285 MB de `fragmentos.jsonl`.
+1024 dimensiones × 4 bytes), o sea ~86 MB por máquina y encoder. Nada más.
 
 **Conviene medir antes de repartir.** Si la máquina con GPU hace su encoder en
 media hora, repartir para ahorrar veinte minutos no compensa la coordinación. La

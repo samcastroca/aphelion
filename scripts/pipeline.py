@@ -75,11 +75,17 @@ def etapas(
 ) -> list[tuple[str, list[str]]]:
     plan: list[tuple[str, list[str]]] = []
 
-    # Con reparto, las etapas previas no se corren: `fragmentos.jsonl` llega
-    # copiado desde la máquina coordinadora, y regenerarlo aquí produciría otro
-    # archivo —basta con que falte un documento por reconocer— y por tanto otros
-    # bloques. Los vectores que esta máquina devolviera no encajarían con nada.
-    if not reparto:
+    # Con reparto, la preparación solo se corre si no hay fragmentos todavía. Si
+    # el archivo ya está —generado aquí o copiado de otra máquina— se respeta:
+    # regenerarlo encima cambiaría los bloques bajo los vectores ya codificados.
+    #
+    # Que cada máquina lo genere es seguro porque la fragmentación es
+    # determinista: el orden sale de `sorted(glob)` y de `pool.map`, que lo
+    # conserva; la limpieza y el idioma son funciones puras del texto; `ruta` es
+    # relativa, no absoluta; y el texto de los escaneados viene de `data/ocr.jsonl`,
+    # versionado. Lo que sí las separaría es saltarse el OCR en una y no en otra,
+    # y por eso la huella del archivo se imprime antes de codificar nada.
+    if not reparto or not config.FRAGMENTOS.exists():
         plan.append(("01_extraer", [str(ETAPAS / "01_extraer.py")]))
         if not sin_ocr:
             plan.append(("02_ocr", [str(ETAPAS / "02_ocr.py")]))
@@ -125,14 +131,10 @@ def comprobar_entorno(
     """
     avisos: list[str] = []
 
-    # Una máquina que solo codifica su tramo no necesita el corpus ni Tesseract:
-    # necesita exactamente el archivo de fragmentos que produjo la coordinadora.
-    if reparto:
-        if not config.FRAGMENTOS.exists():
-            avisos.append(
-                f"no existe {config.FRAGMENTOS}: con --reparto tiene que llegar "
-                "copiado de la máquina coordinadora, no regenerado aquí"
-            )
+    # Con los fragmentos ya hechos, la máquina que solo codifica su tramo no
+    # necesita el corpus ni Tesseract. Si no los tiene, hay que prepararlos, y
+    # entonces sí: se comprueba lo mismo que en una corrida normal.
+    if reparto and config.FRAGMENTOS.exists():
         for encoder in encoders:
             if encoder not in config.ENCODERS:
                 avisos.append(f"encoder desconocido: {encoder}")

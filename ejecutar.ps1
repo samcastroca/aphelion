@@ -29,12 +29,16 @@
     Bájalo si la GPU se queda sin memoria.
 
 .PARAMETER Reparto
-    Porcentaje de los bloques que codifica esta máquina, como A:B. Se detiene
-    ahí: no extrae, no fragmenta y no empaqueta, así que no necesita el corpus ni
-    Tesseract — necesita el archivo trabajo\fragmentos.jsonl copiado de la
-    máquina coordinadora, el mismo en las tres. Los tramos no tienen que ser
-    iguales, quien tenga mejor GPU carga con más porcentaje, pero entre todos
-    deben cubrir de 0 a 100 sin solaparse.
+    Porcentaje de los bloques que codifica esta máquina, como A:B. Prepara los
+    fragmentos si no están, codifica su tramo y se detiene: no empaqueta, porque
+    el índice no está completo hasta juntar los tramos de todas.
+
+    Los tramos no tienen que ser iguales —quien tenga mejor GPU carga con más
+    porcentaje— pero entre todos deben cubrir de 0 a 100 sin solaparse.
+
+    Cada máquina genera su propio trabajo\fragmentos.jsonl y sale idéntico, así
+    que no hay que mover 285 MB. Compruébalo antes de codificar:
+        uv run python scripts/etapas/04_indexar.py --huella
 
 .EXAMPLE
     .\ejecutar.ps1                             # menú: elige y listo
@@ -267,30 +271,19 @@ if ($Reparto) {
     # archivo y sus vectores no encajarían con los de nadie.
     Paso "Fragmentos"
     $fragmentos = "trabajo\fragmentos.jsonl"
-    if (-not (Test-Path $fragmentos)) {
-        Write-Host "  Falta $fragmentos, y sin él no hay tramo que codificar." -ForegroundColor Red
-        # Con el corpus delante, lo más probable es que esta sea la máquina
-        # coordinadora y que el reparto no sea lo que toca todavía: primero se
-        # genera el archivo aquí, y solo entonces las otras pueden repartirse.
-        if (Test-Path "data\CORPUS CODEFEST AD ASTRA 2026") {
-            Write-Host ""
-            Write-Host "  Esta máquina tiene el corpus, así que es la que lo genera." -ForegroundColor Yellow
-            Write-Host "  Las etapas hasta la fragmentación, sin entrar en la codificación:" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "    uv run python scripts/etapas/01_extraer.py" -ForegroundColor Yellow
-            Write-Host "    uv run python scripts/etapas/02_ocr.py" -ForegroundColor Yellow
-            Write-Host "    uv run python scripts/etapas/03_fragmentar.py" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "  Después copia $fragmentos a las otras máquinas y allí" -ForegroundColor Yellow
-            Write-Host "  sí elige el reparto. Tiene que ser el mismo archivo en todas:" -ForegroundColor Yellow
-            Write-Host "  copiado, no regenerado en cada una." -ForegroundColor Yellow
-        } else {
-            Write-Host "  Cópialo de la máquina coordinadora a:" -ForegroundColor Yellow
-            Write-Host "    $PSScriptRoot\trabajo\" -ForegroundColor Yellow
-        }
+    if (Test-Path $fragmentos) {
+        Bien ("{0:N0} MB" -f ((Get-Item $fragmentos).Length / 1MB))
+    } elseif (Test-Path "data\CORPUS CODEFEST AD ASTRA 2026") {
+        # Todas las máquinas tienen el corpus, así que cada una genera el suyo y
+        # no hay que mover 285 MB. Sale idéntico porque la fragmentación es
+        # determinista; lo que las separaría es que una se saltara el OCR, y la
+        # huella que se imprime luego lo delata antes de codificar nada.
+        Aviso "No están hechos todavía. Se preparan aquí antes de codificar el tramo."
+    } else {
+        Write-Host "  Falta $fragmentos y no está el corpus para generarlo." -ForegroundColor Red
+        Write-Host "  Copia el corpus a data\, o trae $fragmentos de otra máquina." -ForegroundColor Yellow
         exit 1
     }
-    Bien ("{0:N0} MB" -f ((Get-Item $fragmentos).Length / 1MB))
 } else {
     Paso "Corpus"
     $corpus = "data\CORPUS CODEFEST AD ASTRA 2026"
@@ -362,7 +355,10 @@ $codigo = $LASTEXITCODE
 
 if ($Reparto -and $codigo -eq 0) {
     Paso "Tramo listo"
-    Write-Host "  Manda a la máquina coordinadora los .npy de:" -ForegroundColor Green
+    Write-Host "  Comprueba que la huella coincide con la de las otras máquinas:" -ForegroundColor Green
+    Write-Host "    uv run python scripts/etapas/04_indexar.py --huella" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  Manda a la máquina que arma el índice los .npy de:" -ForegroundColor Green
     Get-ChildItem "trabajo\embeddings" -Directory -ErrorAction SilentlyContinue |
         ForEach-Object { Get-ChildItem $_.FullName -Directory } |
         ForEach-Object { Write-Host "    $($_.FullName)" -ForegroundColor Green }
