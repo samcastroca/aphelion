@@ -153,10 +153,27 @@ Sin parámetros pregunta qué hacer, para no tener que recordar ninguna opción:
   Elige [1]:
 ```
 
-Elegir la 2 pregunta entre cuántas máquinas se reparte y cuál es esta, y calcula
-el tramo solo — sin que nadie tenga que repartir porcentajes a mano ni comprobar
-que suman 100. Después pregunta qué encoders indexar. Enter en todo deja lo de
-siempre.
+Elegir la 2 pregunta entre cuántas máquinas se reparte y **cómo**, porque no
+todas rinden igual:
+
+```
+=== Cómo se reparte la carga ===
+  1) Todas parecidas               33% / 33% / 33%
+  2) Una el doble que las demás    50% / 25% / 25%
+  3) Una el triple que las demás   60% / 20% / 20%
+  4) Escalonadas, de más a menos   50% / 33% / 17%
+  5) Otro reparto, a mano
+
+=== Qué tramo codifica esta máquina ===
+  1) 0:50                la 1ª,  50% del corpus
+  2) 50:75               la 2ª,  25% del corpus
+  3) 75:100              la 3ª,  25% del corpus
+  4) escribir el tramo a mano
+```
+
+La máquina potente elige el tramo grande y las otras los pequeños. Nadie reparte
+porcentajes a mano ni comprueba que sumen 100. Después pregunta qué encoders
+indexar. Enter en todo deja lo de siempre.
 
 Con cualquier parámetro no pregunta nada y corre directo:
 
@@ -258,10 +275,11 @@ un porcentaje del corpus, y los tramos no tienen que ser iguales: quien tenga
 mejor GPU carga con más.
 
 Lo más fácil es `.\ejecutar.ps1` y elegir la opción 2: pregunta entre cuántas
-máquinas se reparte y cuál es esta, y saca el tramo solo. A mano es lo mismo:
+máquinas se reparte y con qué perfil de carga, y saca los tramos solo — la
+potente se queda el grande. A mano es lo mismo:
 
 ```powershell
-.\ejecutar.ps1 -Reparto 0:50      # en la máquina rápida
+.\ejecutar.ps1 -Reparto 0:50      # en la máquina rápida, la mitad del corpus
 .\ejecutar.ps1 -Reparto 50:75     # en la segunda
 .\ejecutar.ps1 -Reparto 75:100    # en la tercera
 ```

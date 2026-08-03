@@ -65,12 +65,12 @@ def numero_de_bloques(n_fragmentos: int) -> int:
     return (n_fragmentos + FRAG_POR_BLOQUE - 1) // FRAG_POR_BLOQUE
 
 
-def tramo_de_bloques(reparto: str, total_bloques: int) -> range:
-    """'0:40' -> los bloques que caen en el primer 40% del corpus.
+def porcentajes_de_reparto(reparto: str) -> tuple[float, float]:
+    """'0:40' -> (0.0, 40.0). Aborta si no es un tramo utilizable.
 
-    Los extremos se redondean hacia abajo sobre el total de bloques, así que
-    tramos contiguos —0:40, 40:70, 70:100— cubren todos los bloques exactamente
-    una vez sin que las máquinas tengan que ponerse de acuerdo en nada más.
+    Se comprueba aparte del cálculo de bloques para poder llamarlo nada más
+    arrancar: un `0-40` en vez de `0:40` no debe descubrirse después de haber
+    cargado el modelo.
     """
     try:
         crudo_inicio, crudo_fin = reparto.split(":")
@@ -81,6 +81,17 @@ def tramo_de_bloques(reparto: str, total_bloques: int) -> range:
     if not 0 <= p_inicio < p_fin <= 100:
         raise SystemExit(f"--reparto fuera de rango: {reparto!r}. Se espera 0 <= a < b <= 100")
 
+    return p_inicio, p_fin
+
+
+def tramo_de_bloques(reparto: str, total_bloques: int) -> range:
+    """'0:40' -> los bloques que caen en el primer 40% del corpus.
+
+    Los extremos se redondean hacia abajo sobre el total de bloques, así que
+    tramos contiguos —0:40, 40:70, 70:100— cubren todos los bloques exactamente
+    una vez sin que las máquinas tengan que ponerse de acuerdo en nada más.
+    """
+    p_inicio, p_fin = porcentajes_de_reparto(reparto)
     return range(
         int(total_bloques * p_inicio / 100),
         int(total_bloques * p_fin / 100),
@@ -156,6 +167,11 @@ def main() -> int:
         help="codifica solo el tramo A%%-B%% de los bloques y no construye el índice",
     )
     args = ap.parse_args()
+
+    # Lo primero, antes de leer fragmentos y de cargar el modelo: un tramo mal
+    # escrito no puede costar los minutos que tarda el encoder en abrirse.
+    if args.reparto:
+        porcentajes_de_reparto(args.reparto)
 
     if not args.fragmentos.exists():
         print(f"No existe {args.fragmentos}. Ejecuta antes scripts/etapas/03_fragmentar.py")

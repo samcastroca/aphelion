@@ -81,21 +81,49 @@ class TestTramoDeBloques:
         with pytest.raises(SystemExit):
             indexar.tramo_de_bloques(reparto, 31)
 
-    @pytest.mark.parametrize("maquinas", [2, 3, 4, 5])
-    @pytest.mark.parametrize("total", [7, 31, 47, 100])
-    def test_el_reparto_en_partes_iguales_del_menu_particiona(self, maquinas, total):
-        """El menú de `ejecutar.ps1` reparte en partes iguales con esta fórmula.
+    @pytest.mark.parametrize("reparto", ["0-70", "70", "0:120", "a:b"])
+    def test_el_formato_se_comprueba_sin_saber_cuantos_bloques_hay(self, reparto):
+        # Por eso la validación está separada del cálculo: se llama nada más
+        # arrancar, antes de leer los fragmentos y de cargar el modelo.
+        with pytest.raises(SystemExit):
+            indexar.porcentajes_de_reparto(reparto)
 
-        Está aquí y no en PowerShell porque lo que hay que comprobar es que los
-        porcentajes que produce caen en bloques disjuntos y completos, y quien
-        traduce porcentajes a bloques es esta función. Si el redondeo dejara un
-        hueco, una máquina entregaría vectores que no cubren su parte y la
-        coordinadora tendría que recodificarla sin enterarse de por qué.
+    @pytest.mark.parametrize(
+        "pesos",
+        [
+            (1, 1),  # dos máquinas parecidas
+            (2, 1),  # una el doble que la otra
+            (1, 1, 1),  # tres parecidas
+            (2, 1, 1),  # una el doble que las otras dos
+            (3, 1, 1),  # una el triple
+            (3, 2, 1),  # escalonadas
+            (1, 1, 1, 1),
+            (3, 1, 1, 1),
+            (4, 3, 2, 1),
+            (1, 1, 1, 1, 1),
+            (5, 4, 3, 2, 1),
+        ],
+    )
+    @pytest.mark.parametrize("total", [7, 31, 47, 100])
+    def test_los_perfiles_de_carga_del_menu_particionan(self, pesos, total):
+        """El menú de `ejecutar.ps1` reparte según el rendimiento de cada máquina.
+
+        Cada perfil son pesos relativos —(2, 1, 1) es "la primera rinde el doble
+        que las otras dos"— y de ahí salen los porcentajes. Lo que hay que
+        comprobar es que caen en bloques disjuntos y completos, sean iguales o
+        no, y quien traduce porcentajes a bloques es esta función: por eso el
+        test está aquí y no en PowerShell.
+
+        Un hueco por redondeo haría que una máquina entregara vectores que no
+        cubren su parte, y la coordinadora la recodificaría sin enterarse de por
+        qué. Un solape es la mitad de grave: solo cuesta GPU repetida.
         """
-        tramos = [
-            f"{round((i - 1) * 100 / maquinas, 3)}:{round(i * 100 / maquinas, 3)}"
-            for i in range(1, maquinas + 1)
-        ]
+        suma = sum(pesos)
+        tramos, acumulado = [], 0
+        for peso in pesos:
+            inicio = round(acumulado * 100 / suma, 3)
+            acumulado += peso
+            tramos.append(f"{inicio}:{round(acumulado * 100 / suma, 3)}")
 
         cubierto: list[int] = []
         for tramo in tramos:

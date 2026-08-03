@@ -136,22 +136,91 @@ if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
             "Solo preparar el entorno, sin procesar nada"
         )) {
         2 {
-            $maquinas = [int](Leer "¿Entre cuántas máquinas?" 3)
-            if ($maquinas -lt 2) { $maquinas = 2 }
-            $cual = [int](Leer "¿Cuál de ellas es esta? (1-$maquinas)" 1)
-            if ($cual -lt 1 -or $cual -gt $maquinas) { $cual = 1 }
+            $maquinas = 1 + (Elegir "Entre cuántas máquinas se reparte" @(
+                    "2 máquinas"
+                    "3 máquinas"
+                    "4 máquinas"
+                    "5 máquinas"
+                ) 2)
 
-            # Tramos iguales por defecto. Como el reparto se redondea sobre el
-            # número de bloques, tramos contiguos cubren todo exactamente una vez
-            # sin que las máquinas tengan que acordar nada más.
-            $ini = [math]::Round(($cual - 1) * 100 / $maquinas, 3)
-            $fin = [math]::Round($cual * 100 / $maquinas, 3)
-            $Reparto = "${ini}:${fin}"
-            Bien "Le toca el tramo $Reparto"
+            # Las máquinas no rinden igual, así que los tramos tampoco tienen por
+            # qué serlo. Cada perfil son pesos relativos: 2,1,1 es "la primera
+            # rinde el doble que las otras dos". Los porcentajes salen de ahí, y
+            # como el reparto se redondea sobre el número de bloques, tramos
+            # contiguos cubren todo exactamente una vez — sean iguales o no.
+            $perfiles = @(
+                @{ nombre = "Todas parecidas";                pesos = @(1) * $maquinas }
+                @{ nombre = "Una el doble que las demás";     pesos = @(2) + @(1) * ($maquinas - 1) }
+                @{ nombre = "Una el triple que las demás";    pesos = @(3) + @(1) * ($maquinas - 1) }
+                @{ nombre = "Escalonadas, de más a menos";    pesos = $maquinas..1 }
+            )
 
-            if ((Leer "¿Ajustarlo a mano, si esta máquina es más rápida? (s/N)" "n") -match '^[sSyY]') {
-                $Reparto = Leer "Tramo A:B" $Reparto
+            $opcionesPerfil = @()
+            foreach ($p in $perfiles) {
+                # Ojo con el nombre: PowerShell no distingue mayúsculas, así que
+                # una variable `$reparto` sería el parámetro `$Reparto` y su
+                # ValidatePattern rechazaría este texto.
+                $suma = ($p.pesos | Measure-Object -Sum).Sum
+                $porcentajes = ($p.pesos | ForEach-Object { "{0:0}%" -f ($_ * 100 / $suma) }) -join " / "
+                $opcionesPerfil += ("{0,-28}  {1}" -f $p.nombre, $porcentajes)
             }
+            $opcionesPerfil += "Otro reparto, a mano"
+
+            $perfil = Elegir "Cómo se reparte la carga" $opcionesPerfil 1
+
+            if ($perfil -le $perfiles.Count) {
+                $pesos = $perfiles[$perfil - 1].pesos
+                $suma = ($pesos | Measure-Object -Sum).Sum
+                $tramos = @()
+                $acumulado = 0
+                foreach ($peso in $pesos) {
+                    $ini = [math]::Round($acumulado * 100 / $suma, 3)
+                    $acumulado += $peso
+                    $fin = [math]::Round($acumulado * 100 / $suma, 3)
+                    $tramos += "${ini}:${fin}"
+                }
+            } else {
+                $tramos = @()
+            }
+
+            $etiquetas = @()
+            for ($i = 0; $i -lt $tramos.Count; $i++) {
+                $trozo = $tramos[$i] -split ":"
+                $tamano = [double]$trozo[1] - [double]$trozo[0]
+                $etiquetas += ("{0,-18}  la {1}ª,  {2:0}% del corpus" -f $tramos[$i], ($i + 1), $tamano)
+            }
+            $etiquetas += "escribir el tramo a mano"
+
+            $elegido = Elegir "Qué tramo codifica esta máquina" $etiquetas 1
+            if ($elegido -le $tramos.Count) {
+                $Reparto = $tramos[$elegido - 1]
+            } else {
+                # A mano para el reparto que no encaje en ningún perfil. Entre
+                # todas las máquinas los tramos deben cubrir de 0 a 100 sin
+                # solaparse; cada una escribe el suyo.
+                #
+                # Se valida aquí y no más adelante: escrito a mano, el tramo se
+                # salta el ValidatePattern del parámetro, y un `0-70` en vez de
+                # `0:70` no se vería hasta que el indexador hubiera cargado el
+                # modelo.
+                # Se lee en una variable aparte y no en $Reparto: el parámetro
+                # lleva un ValidatePattern, y asignarle un intento fallido
+                # revienta el guion antes de poder rechazarlo con un mensaje.
+                $sugerido = if ($tramos.Count) { $tramos[0] } else { "0:50" }
+                while ($true) {
+                    $tramoManual = Leer "Tramo A:B (0 a 100)" $sugerido
+                    if ($tramoManual -match '^(\d+(\.\d+)?):(\d+(\.\d+)?)$') {
+                        $a = [double]$Matches[1]
+                        $b = [double]$Matches[3]
+                        if ($a -lt $b -and $b -le 100) { break }
+                        Aviso "El primero tiene que ser menor que el segundo, y el segundo como mucho 100."
+                    } else {
+                        Aviso "Formato A:B, por ejemplo 0:70."
+                    }
+                }
+                $Reparto = $tramoManual
+            }
+            Bien "Tramo $Reparto"
         }
         3 {
             # Los nombres los define pipeline.py; si alguno dejara de existir, es
