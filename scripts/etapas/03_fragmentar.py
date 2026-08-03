@@ -85,6 +85,14 @@ def main() -> int:
     print(f"documentos: {len(archivos):,} | procesos: {args.procesos} | "
           f"max_tokens: {args.max_tokens}")
 
+    # El tokenizador se carga aquí antes de abrir el pool. Si no, los workers
+    # salen a por él a la vez y en una máquina nueva son N descargas simultáneas
+    # del mismo archivo; con la caché caliente, N comprobaciones al Hub que
+    # dejan la barra parada en 0% y sueltan un aviso por proceso.
+    print("tokenizador ...", end="", flush=True)
+    chunking._tokenizador(args.encoder)
+    print(" listo")
+
     estados: Counter[str] = Counter()
     idiomas: Counter[str] = Counter()
     por_formato: Counter[str] = Counter()
