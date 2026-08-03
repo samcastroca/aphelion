@@ -354,9 +354,18 @@ uv run python scripts/analisis/evaluar.py --detalle
 ## Notas de diseño que conviene no perder
 
 - **`fuente` es la clave de emparejamiento** con el ground truth (§10.2.1), no el
-  `doc_id`. Se toma literal del inventario de ADL.
+  `doc_id`. Se toma literal del inventario de ADL. Por eso mismo la agregación a
+  documento agrupa por `fuente`: hay 59 nombres repetidos en 186 archivos, y dos
+  `doc_id` con la misma fuente en el top-3 cuentan como un solo acierto.
 - **`generador.py` debe reproducir los resultados** partiendo solo de `entrega/`.
   Si no reproduce, la entrega queda excluida de la evaluación. Es eliminatorio.
+- **La política de recuperación vive en dos sitios** —`aphelion.busqueda` y
+  `entrega/generador.py`— y cualquier cambio va en los dos.
+  `tests/test_paridad_entregable.py` los compara sobre un índice sintético en
+  cada `pytest`; `06_verificar.py` lo repite sobre el índice real.
+- **Los fragmentos se presupuestan a 504 tokens, no 512** (`CHUNK_PRESUPUESTO`):
+  la ventana de mE5 incluye los especiales y el prefijo `passage: ` que el
+  fragmento no trae, y sin la reserva la cola se trunca en silencio.
 - **Ninguna oración cruza la frontera entre fragmentos** (§3.3).
 - **Ningún modelo generativo interviene** en indexación ni recuperación (§4.2, §8.3).
 - El orden de `metadata.jsonl` debe coincidir con los identificadores internos de

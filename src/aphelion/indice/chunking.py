@@ -184,7 +184,7 @@ def _partir_oracion_larga(oracion: str, tokenizador, presupuesto: int) -> list[s
 def agrupar(
     oraciones: list[str],
     tokenizador,
-    max_tokens: int = config.CHUNK_TOKENS,
+    max_tokens: int = config.CHUNK_PRESUPUESTO,
     solape: float = config.CHUNK_SOLAPE,
     max_fragmentos: int | None = None,
 ) -> list[tuple[str, int]]:
@@ -280,7 +280,9 @@ def fragmentar(
     texto: str,
     idioma: str,
     nombre_encoder: str = config.ENCODER_PRINCIPAL,
-    max_tokens: int = config.CHUNK_TOKENS,
+    # El presupuesto reserva unos tokens para los especiales y el prefijo
+    # "passage: " de E5: un fragmento a ventana completa se truncaría en silencio.
+    max_tokens: int = config.CHUNK_PRESUPUESTO,
 ) -> list[Fragmento]:
     """Convierte un documento limpio en su lista de fragmentos."""
     if not texto.strip():

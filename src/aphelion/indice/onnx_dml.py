@@ -36,9 +36,10 @@ from .. import config
 
 PROVEEDOR = "DmlExecutionProvider"
 
-# Longitud fija en lugar de dinámica: los fragmentos se construyen para no
-# superar CHUNK_TOKENS y una forma estática evita que DirectML replanifique el
-# grafo en cada tamaño de lote.
+# Longitud fija en lugar de dinámica: una forma estática evita que DirectML
+# replanifique el grafo en cada tamaño de lote. Es la ventana del modelo, no el
+# presupuesto de fragmentación: los fragmentos se construyen a CHUNK_PRESUPUESTO
+# justamente para que, con los especiales y el prefijo de E5, quepan aquí.
 LARGO = config.CHUNK_TOKENS
 
 

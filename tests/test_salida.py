@@ -76,12 +76,30 @@ class TestConstruirFragmentos:
         salida = construir_fragmentos(cands, top=10)
         assert [f["rank"] for f in salida] == list(range(1, len(salida) + 1))
 
-    def test_ningun_documento_acapara_el_top(self):
+    def test_el_tope_por_documento_manda_mientras_haya_alternativa(self):
         # Tres fragmentos largos del mismo documento darían seis posiciones al
-        # subdividir; la diversificación existe justamente para impedirlo.
+        # subdividir; con candidatos de otro documento disponibles, el tope los
+        # frena en el máximo permitido.
         cands = [candidato(f"c{i}", "MISMO", oraciones(20, 20)) for i in range(3)]
+        cands += [candidato(f"o{i}", f"OTRO{i}", oraciones(2, 10)) for i in range(7)]
         salida = construir_fragmentos(cands, top=10, subdividir_largos=True)
-        assert len(salida) == config.MAX_FRAGMENTOS_POR_DOC
+        del_mismo = [f for f in salida if f["doc_id"] == "MISMO"]
+        assert len(del_mismo) == config.MAX_FRAGMENTOS_POR_DOC
+        assert len(salida) == 10
+
+    def test_sin_alternativa_el_tope_cede_antes_que_repetir(self):
+        # Cuando el pool entero es de un solo documento, rellenar con sus piezas
+        # restantes informa más que repetir literalmente la última. El tope
+        # cede en la segunda pasada; el relleno por repetición queda como último
+        # recurso del esquema.
+        cands = [
+            candidato(f"c{i}", "MISMO", oraciones(20, 20, prefijo=f"c{i}x"))
+            for i in range(3)
+        ]
+        salida = construir_fragmentos(cands, top=10, subdividir_largos=True)
+        assert len(salida) > config.MAX_FRAGMENTOS_POR_DOC
+        # ninguna pieza se repite: son textos distintos del mismo documento
+        assert len({f["text"] for f in salida}) == len(salida)
 
     def test_se_llenan_las_diez_posiciones(self):
         cands = [candidato(f"c{i}", f"D{i}", oraciones(20, 20)) for i in range(10)]

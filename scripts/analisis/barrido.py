@@ -37,6 +37,11 @@ from aphelion.evaluacion import metricas
 
 # Rejilla completa. Todos estos valores se defendieron a priori en el diseño y
 # ninguno se ha medido todavía contra datos.
+#
+# `umbral` es el post-filtro relativo de la §8.7: None lo desactiva; 0.9 exige
+# al menos el 90% de la similitud del mejor candidato de ese índice. Se barre
+# aquí y no se fija a priori porque su efecto depende de cuánta cola de ruido
+# traiga cada consulta, que es exactamente lo que no se sabe sin ground truth.
 REJILLA = {
     "fusion": ["rrf", "combsum"],
     "k0": [10, 20, 60],
@@ -44,6 +49,7 @@ REJILLA = {
     "max_por_doc": [2, 3, 5],
     "candidatos": [100, 200],
     "subdividir": [False, True],
+    "umbral": [None, 0.9],
 }
 
 REJILLA_RAPIDA = {
@@ -53,6 +59,7 @@ REJILLA_RAPIDA = {
     "max_por_doc": [3],
     "candidatos": [200],
     "subdividir": [False],
+    "umbral": [None],
 }
 
 
@@ -66,10 +73,12 @@ class Corrida:
 
     @property
     def etiqueta(self) -> str:
+        umbral = self.cfg.get("umbral")
         return (
             f"{self.cfg['fusion']:<8} k0={self.cfg['k0']:<3} "
             f"boost={self.cfg['boost']:<5} doc={self.cfg['max_por_doc']} "
-            f"cand={self.cfg['candidatos']:<4} sub={'sí' if self.cfg['subdividir'] else 'no'}"
+            f"cand={self.cfg['candidatos']:<4} sub={'sí' if self.cfg['subdividir'] else 'no'} "
+            f"umbral={umbral if umbral else 'no'}"
         )
 
 
@@ -153,7 +162,11 @@ def main() -> int:
     corridas: list[Corrida] = []
     for cfg in tqdm(configs, desc="configuraciones", unit="cfg"):
         recuperador = recuperacion.Recuperador(
-            indices, k0=cfg["k0"], boost=cfg["boost"], max_por_doc=cfg["max_por_doc"]
+            indices,
+            k0=cfg["k0"],
+            boost=cfg["boost"],
+            max_por_doc=cfg["max_por_doc"],
+            umbral_relativo=cfg.get("umbral"),
         )
         resultados = []
         for pregunta in anotadas:

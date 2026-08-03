@@ -99,11 +99,24 @@ class ResultadoOCR:
         return len(self.paginas)
 
 
+# Formatos que se entregan a Tesseract como imagen directa, sin rasterizar.
+# PyMuPDF abre JPG y PNG como documentos, pero no AVIF; Pillow (>= 11.2) abre
+# los cuatro, así que las imágenes van todas por Pillow y PyMuPDF queda solo
+# para los PDF, que es lo suyo.
+_EXTENSIONES_IMAGEN = {".jpg", ".jpeg", ".png", ".avif", ".webp", ".tif", ".tiff"}
+
+
 def pdf_a_imagenes(ruta: Path, dpi: int = DPI, max_paginas: int | None = None):
     """Rasteriza el PDF. 200 dpi es el punto donde el OCR deja de mejorar de
-    forma apreciable y la memoria todavía es razonable en documentos largos."""
+    forma apreciable y la memoria todavía es razonable en documentos largos.
+
+    Las imágenes sueltas no se rasterizan: se abren con Pillow y se devuelven
+    como una única página."""
     import pymupdf
     from PIL import Image
+
+    if ruta.suffix.lower() in _EXTENSIONES_IMAGEN:
+        return [Image.open(ruta).convert("RGB")]
 
     imagenes = []
     with pymupdf.open(ruta) as doc:

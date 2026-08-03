@@ -32,6 +32,7 @@ class Candidato:
     fenomeno: int
     puntaje: float
     posiciones: dict[str, int]  # encoder -> rango en su índice (base 1)
+    idioma: str = "es"  # del fragmento; decide el segmentador al recortar
 
     @property
     def consenso(self) -> int:
@@ -74,6 +75,7 @@ def fusionar_rrf(
                     fenomeno=meta.get("fenomeno", 0),
                     puntaje=0.0,
                     posiciones={},
+                    idioma=meta.get("idioma") or "es",
                 )
                 acumulado[chunk_id] = candidato
             candidato.puntaje += 1.0 / (k0 + posicion)
@@ -110,12 +112,36 @@ def fusionar_combsum(
                     fenomeno=meta.get("fenomeno", 0),
                     puntaje=0.0,
                     posiciones={},
+                    idioma=meta.get("idioma") or "es",
                 )
                 acumulado[chunk_id] = candidato
             candidato.puntaje += similitud
             candidato.posiciones[encoder] = posicion
 
     return sorted(acumulado.values(), key=lambda c: c.puntaje, reverse=True)
+
+
+def filtrar_por_umbral_relativo(
+    ranking: list[tuple[dict, float]],
+    umbral: float | None,
+) -> list[tuple[dict, float]]:
+    """Post-filtro de la §8.7: descarta la cola de baja similitud de un índice.
+
+    El umbral es relativo al mejor candidato de esa consulta en ese índice, no
+    absoluto, porque las escalas de coseno de los dos encoders no son
+    comparables: mE5 comprime todo hacia 0,75–0,92 y BGE-M3 se mueve más abajo.
+    Como el ranking viene ordenado de mayor a menor, el filtro equivale a un
+    k adaptativo por consulta y no altera las posiciones de lo que conserva.
+    """
+    if not umbral or not ranking:
+        return ranking
+
+    tope = ranking[0][1]
+    if tope <= 0:  # sin señal utilizable, mejor no filtrar nada
+        return ranking
+
+    corte = umbral * tope
+    return [(meta, sim) for meta, sim in ranking if sim >= corte]
 
 
 def aplicar_boost_fenomeno(
@@ -209,24 +235,33 @@ def agregar_a_documentos(
     respuesta exacta. Dada la heterogeneidad del corpus —alertas de un párrafo
     junto a atlas de cientos de páginas— ese sesgo sería severo.
 
+    La agregación es por `fuente` y no por `doc_id`, porque el jurado empareja
+    los documentos por `fuente` (§10.2.1) y el corpus tiene 59 nombres
+    estandarizados repetidos en 186 archivos: dos doc_id con la misma fuente en
+    el top-3 cuentan como un solo acierto posible y desperdician una posición.
+    De cada fuente se reporta el doc_id de su mejor fragmento.
+
     El número de fragmentos recuperados actúa solo como desempate, con peso
     suficientemente pequeño para no alterar el orden principal.
     """
     mejor: dict[str, float] = {}
     cuenta: dict[str, int] = {}
+    representante: dict[str, str] = {}  # fuente -> doc_id del mejor fragmento
 
     for candidato in candidatos:
-        anterior = mejor.get(candidato.doc_id)
+        clave = candidato.fuente or candidato.doc_id
+        anterior = mejor.get(clave)
         if anterior is None or candidato.puntaje > anterior:
-            mejor[candidato.doc_id] = candidato.puntaje
-        cuenta[candidato.doc_id] = cuenta.get(candidato.doc_id, 0) + 1
+            mejor[clave] = candidato.puntaje
+            representante[clave] = candidato.doc_id
+        cuenta[clave] = cuenta.get(clave, 0) + 1
 
     ordenados = sorted(
         mejor.items(),
         key=lambda kv: (kv[1], cuenta[kv[0]] * 1e-9),
         reverse=True,
     )
-    return [doc_id for doc_id, _ in ordenados[:top]]
+    return [representante[clave] for clave, _ in ordenados[:top]]
 
 
 # --- Recuperador ----------------------------------------------------------
@@ -243,6 +278,7 @@ class Recuperador:
         boost: float = config.BOOST_FENOMENO,
         max_por_doc: int = config.MAX_FRAGMENTOS_POR_DOC,
         candidatos_por_indice: int = config.CANDIDATOS_POR_INDICE,
+        umbral_relativo: float | None = config.UMBRAL_RELATIVO,
     ):
         if not indices:
             raise ValueError("no hay índices cargados")
@@ -251,6 +287,7 @@ class Recuperador:
         self.boost = boost
         self.max_por_doc = max_por_doc
         self.candidatos_por_indice = candidatos_por_indice
+        self.umbral_relativo = umbral_relativo
         self._encoders = encoders_cargados or {}
 
     def _encoder(self, nombre: str):
@@ -286,6 +323,13 @@ class Recuperador:
         fusion: str = "rrf",
     ) -> Resultado:
         """La parte barata: fusionar, realzar, diversificar y agregar."""
+        # El filtro va antes de la fusión y dentro de esta etapa, no en `buscar`:
+        # así el barrido puede variar el umbral sobre el mismo pool cacheado.
+        if self.umbral_relativo:
+            rankings = {
+                nombre: filtrar_por_umbral_relativo(lista, self.umbral_relativo)
+                for nombre, lista in rankings.items()
+            }
         if fusion == "combsum":
             candidatos = fusionar_combsum(rankings)
         else:
@@ -295,8 +339,12 @@ class Recuperador:
         # La deduplicación se aplica solo a la lista de fragmentos. La agregación
         # a documento usa el conjunto completo: dos documentos distintos pueden
         # compartir un texto, y descartar uno lo volvería inalcanzable.
+        #
+        # Se entregan más candidatos de los que se publican: la construcción de
+        # la salida puede descartar piezas por el tope por documento, y con
+        # repuestos reales a mano no tiene que rellenar repitiendo fragmentos.
         fragmentos = diversificar(
-            sin_duplicados(candidatos), top_fragmentos, self.max_por_doc
+            sin_duplicados(candidatos), top_fragmentos * 3, self.max_por_doc
         )
         documentos = agregar_a_documentos(candidatos, top_documentos)
 

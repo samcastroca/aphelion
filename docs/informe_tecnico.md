@@ -55,7 +55,11 @@ búsqueda.
 
 ## 2. Estrategia de chunking
 
-**512 tokens, 15% de superposición, cortes en frontera oracional.**
+**Ventana de 512 tokens, 15% de superposición, cortes en frontera oracional.**
+El presupuesto efectivo de cada fragmento es de 504 tokens: reservamos 8 para lo
+que la ventana de mE5-large incluye y el fragmento no trae —los tokens
+especiales y el prefijo `passage: ` con que E5 codifica los pasajes—, porque un
+fragmento a ventana completa perdería su cola por truncamiento silencioso.
 
 ### Qué combinamos y qué dejamos fuera
 
@@ -165,9 +169,10 @@ exhaustiva. No buscamos modelos de mayor dimensión porque más dimensiones no
 garantizan mejor recuperación y sí encarecen todo.
 
 **Longitud máxima de entrada.** La ventana de 8192 tokens de BGE-M3 nos deja las
-manos libres en el chunking. mE5-large se queda en 512, que es justamente nuestro
-presupuesto: diseñamos el chunking contra el más restrictivo de los dos para que
-ningún fragmento sufra truncamiento silencioso en ninguno de los dos índices.
+manos libres en el chunking. mE5-large se queda en 512: diseñamos el chunking
+contra el más restrictivo de los dos —504 tokens de contenido más la reserva
+para especiales y prefijo— para que ningún fragmento sufra truncamiento
+silencioso en ninguno de los dos índices.
 
 **Rendimiento en benchmarks.** Los dos son modelos de recuperación densa, no
 optimizados para clasificación ni para similitud de pares. Las cifras de MIRACL
@@ -381,6 +386,19 @@ con 0,85; con la heterogeneidad de tamaños que tiene este corpus, ese sesgo ser
 grave. El número de fragmentos solo lo usamos para desempatar, con un peso
 pequeño.
 
+La agregación agrupa por `fuente` y no por nuestro `doc_id`, porque el
+emparejamiento con el ground truth es por `fuente` (§10.2.1) y el corpus tiene
+59 nombres estandarizados repetidos en 186 archivos: dos `doc_id` con la misma
+fuente en el top-3 cuentan como un solo acierto posible y desperdiciarían una de
+las tres posiciones. De cada fuente reportamos el `doc_id` de su mejor
+fragmento.
+
+**Post-filtro por umbral relativo** (§8.7). El sistema puede descartar de cada
+índice los candidatos por debajo de una fracción de la mejor similitud de esa
+consulta en ese índice. Es relativo y no absoluto porque las escalas de coseno
+de los dos encoders no son comparables. Está implementado y desactivado: su
+valor entra al barrido contra el conjunto de evaluación, no se fija a priori.
+
 **Sin modelos generativos.** No hay reordenamiento por LLM, ni reformulación o
 expansión de la consulta, ni filtrado generativo, ni síntesis de fragmentos. Todo
 se resuelve sobre vectores, puntuaciones de similitud y metadata.
@@ -402,6 +420,13 @@ el texto entregado de 103.791 a 83.971 palabras por corrida y la cobertura de 10
 fragmentos distintos a 6, porque la segunda pieza de un fragmento de 321 palabras
 son 71 y se lleva una posición entera con muy poco contenido. Recortar deja las
 diez posiciones con 250 palabras cada una.
+
+El recorte segmenta con el idioma del fragmento —lo guardamos en la metadata—,
+no con español fijo: el 87% del corpus está en inglés y las abreviaturas que el
+segmentador reconoce dependen del idioma. Y si el tope por documento o un pool
+corto dejan posiciones vacías, se rellenan con fragmentos reales aún no
+emitidos antes que repetir alguno: la repetición literal, que el esquema
+permitiría, no aporta información nueva en ninguna de las dos métricas.
 
 Dejamos la subdivisión implementada pero desactivada. Si al anotar resulta que la
 cola de un fragmento bien posicionado aporta más que un fragmento nuevo peor

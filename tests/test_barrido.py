@@ -150,6 +150,9 @@ class TestRejilla:
         assert all(set(c) == {"a", "b"} for c in combos)
 
     def test_la_rejilla_completa_es_manejable(self):
+        # El techo subió de 250 a 500 al entrar el umbral de la §8.7: cada
+        # configuración solo reordena el pool cacheado, así que duplicar la
+        # rejilla cuesta minutos, no horas de GPU.
         mod = cargar_barrido()
-        assert len(mod.combinaciones(mod.REJILLA)) <= 250
+        assert len(mod.combinaciones(mod.REJILLA)) <= 500
         assert len(mod.combinaciones(mod.REJILLA_RAPIDA)) <= 20

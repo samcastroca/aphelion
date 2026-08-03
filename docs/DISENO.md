@@ -115,11 +115,27 @@ lo que dispare alguna: densidad de diacríticos (un texto español sin tildes ni
 eñes indica el paquete de idioma equivocado), proporción de caracteres no
 imprimibles y palabras por página.
 
+**Imágenes sueltas.** Las imágenes del corpus (JPG, PNG, AVIF) se entregan a
+Tesseract abiertas con Pillow, no rasterizadas con PyMuPDF: PyMuPDF no abre
+AVIF, y el corpus trae uno (`F2-SWF-065`). Pillow ≥ 11.2 abre los cuatro
+formatos, así que las imágenes van todas por el mismo camino y PyMuPDF queda
+solo para los PDF.
+
 ---
 
 ## 5. Chunking
 
-**Configuración base: 512 tokens, 15% de solape, corte en frontera oracional.**
+**Configuración base: ventana de 512 tokens, 15% de solape, corte en frontera
+oracional.**
+
+**El presupuesto de fragmentación es 504, no 512.** La ventana de mE5-large
+incluye lo que el fragmento no trae: los tokens especiales (`<s>`, `</s>`) y el
+prefijo `passage: ` con que E5 exige codificar los pasajes. Un fragmento
+presupuestado a 512 tokens de contenido entra al modelo con ~518 y pierde la
+cola en silencio — sin error, solo con vectores que no representan el final del
+texto. `config.RESERVA_TOKENS_ENCODER = 8` descuenta ese sobrecoste del
+presupuesto (`CHUNK_PRESUPUESTO = 504`); la ventana del modelo y del grafo ONNX
+sigue siendo 512.
 
 - La segmentación en oraciones usa `pysbd`, con soporte nativo para español, inglés y
   portugués.
@@ -230,16 +246,46 @@ Flujo por consulta:
    partida, ajustado empíricamente.
 4. **Diversificación**: tope de fragmentos por documento en el top-10, para evitar que
    un único documento erróneo consuma las diez posiciones evaluadas.
-5. **Agregación a documento por max pooling**: la puntuación de un documento es la de su
-   mejor fragmento. Se descarta sum pooling por su sesgo de longitud — un documento con
-   40 fragmentos débiles (0.15) acumula 6.0 y desplaza a un informe preciso con un
-   fragmento de 0.85. Dada la heterogeneidad de tamaños del corpus, este sesgo
-   sería severo.
+5. **Agregación a documento por max pooling, con la `fuente` como clave**: la
+   puntuación de un documento es la de su mejor fragmento. Se descarta sum pooling
+   por su sesgo de longitud — un documento con 40 fragmentos débiles (0.15) acumula
+   6.0 y desplaza a un informe preciso con un fragmento de 0.85. Dada la
+   heterogeneidad de tamaños del corpus, este sesgo sería severo.
+
+   La agregación agrupa por `fuente` y no por `doc_id`, porque el jurado empareja
+   los documentos por `fuente` (§10.2.1) y el corpus tiene 59 nombres
+   estandarizados repetidos en 186 archivos: dos `doc_id` con la misma fuente en
+   el top-3 cuentan como un solo acierto posible y desperdician una posición. De
+   cada fuente se reporta el `doc_id` de su mejor fragmento.
 6. **Boost suave por fenómeno**, no filtro duro. La correspondencia consulta→fenómeno es
    conocida (q001–q016 → F1, q017–q032 → F2, q033–q050 → F3), pero varias consultas
    admiten evidencia transversal (q005 y q046 mencionan Colombia desde fenómenos
    distintos; q027 cruza IA con operaciones espaciales). Un filtro estricto cerraría el
    acceso a documentos legítimamente relevantes.
+7. **Umbral relativo de similitud** (post-filtro de la §8.7, desactivado por
+   defecto). Descarta de cada índice los candidatos por debajo de una fracción de
+   la mejor similitud de esa consulta en ese índice. Es relativo y no absoluto
+   porque las escalas de coseno de los dos encoders no son comparables — mE5
+   comprime todo hacia 0,75–0,92 —, y como el ranking viene ordenado, equivale a
+   un k adaptativo por consulta que nunca reordena lo que conserva. El valor se
+   decide en el barrido (`umbral` en la rejilla), no a priori: su efecto depende
+   de cuánta cola de ruido traiga cada consulta, que sin ground truth no se sabe.
+
+### Construcción de la salida y relleno
+
+El recorte a 250 palabras y la subdivisión segmentan con **el idioma del
+fragmento** (campo `idioma` de la metadata), no con español fijo: el 87% del
+corpus está en inglés y las abreviaturas que `pysbd` reconoce dependen del
+idioma; segmentar mal mueve el punto de corte.
+
+El tope de fragmentos por documento es firme mientras haya alternativa y cede
+cuando no la hay: si la primera pasada deja posiciones vacías —pool corto, tope
+alcanzado—, una segunda las rellena con piezas aún no emitidas ignorando el
+tope. Un fragmento real de un documento ya representado informa más que la
+alternativa, que era repetir literalmente el último fragmento para completar el
+esquema. La repetición queda como último recurso, solo cuando el pool entero se
+agota. Para que esa segunda pasada tenga repuestos, la diversificación entrega
+el triple de candidatos de los que se publican.
 
 **Ningún modelo generativo interviene** en ninguna etapa: no hay reranking por LLM,
 expansión de consulta, filtrado generativo ni síntesis. Todas las operaciones se
@@ -430,5 +476,9 @@ aparecería como recuperación mediocre. Al generarlo desde
 | Colisión de nombres en `fuente` (59 casos) | Se reporta el nombre estandarizado literal; la ruta se conserva aparte para trazabilidad |
 | Sesgo del ground truth interno hacia lo que el sistema ya recupera | Pool generado por unión de dos configuraciones distintas |
 | Tensión NDCG@10 / F1@3 en el tamaño de chunk | Barrido empírico sobre el conjunto interno, no elección a priori |
+| Truncamiento silencioso en mE5: la ventana de 512 incluye especiales y el prefijo `passage: ` que el fragmento no trae | El presupuesto de fragmentación reserva 8 tokens (`CHUNK_PRESUPUESTO = 504`); la ventana del modelo sigue en 512 |
+| Dos `doc_id` con la misma `fuente` en el top-3 cuentan como un solo acierto (59 nombres repetidos) | La agregación a documento agrupa por `fuente` y reporta el `doc_id` del mejor fragmento |
+| El relleno del esquema repetía fragmentos, que no aportan ni a NDCG ni a F1 | Segunda pasada con piezas reales no emitidas; la repetición queda como último recurso |
+| Divergencia entre el paquete y `generador.py` descubierta tras horas de GPU | `tests/test_paridad_entregable.py` compara ambos sobre un índice sintético en cada `pytest`; `06_verificar.py` lo repite sobre el índice real |
 | Indexación sin GPU: 0,27 frag/s en el Ryzen 5 3400G, 65 h por encoder | **Resuelto.** ONNX Runtime sobre DirectML aprovecha la Radeon RX 6650 XT: 5,0 frag/s, unas 3,5 h por encoder |
 | El backend ONNX podría divergir del PyTorch con el que el jurado codifica las consultas | `onnx_dml.verificar()` compara ambos antes de indexar y aborta si el coseno baja de 0,999. Medido: 0,99974 |

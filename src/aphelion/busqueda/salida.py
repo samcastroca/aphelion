@@ -118,24 +118,40 @@ def construir_fragmentos(
     entregadas** y no sobre fragmentos del índice. Sin eso un solo documento
     podría ocupar seis de las diez posiciones evaluadas, que es exactamente lo
     que la diversificación existe para impedir.
+
+    El recorte y la subdivisión segmentan con el idioma del fragmento, no con
+    español fijo: el 87% del corpus está en inglés y las abreviaturas que pysbd
+    reconoce dependen del idioma; segmentar mal mueve el punto de corte.
+
+    El tope por documento es firme mientras haya alternativa y cede cuando no la
+    hay: si la primera pasada deja posiciones vacías, una segunda las rellena
+    con las piezas aún no emitidas ignorando el tope. Un fragmento real de un
+    documento ya representado informa más que la alternativa, que es repetir
+    literalmente el último fragmento para completar el esquema.
     """
     salida: list[dict] = []
     por_doc: dict[str, int] = {}
+    piezas_de: dict[str, list[str]] = {}  # chunk_id -> piezas calculadas una vez
+    emitidas: dict[str, int] = {}  # chunk_id -> cuántas piezas suyas ya salieron
 
-    for candidato in candidatos:
-        if len(salida) >= top:
-            break
-        if por_doc.get(candidato.doc_id, 0) >= max_por_doc:
-            continue
+    def piezas(candidato: Candidato) -> list[str]:
+        if candidato.chunk_id not in piezas_de:
+            if subdividir_largos:
+                piezas_de[candidato.chunk_id] = subdividir(
+                    candidato.texto, candidato.idioma, max_palabras
+                )
+            else:
+                piezas_de[candidato.chunk_id] = [
+                    recortar_a_limite(candidato.texto, candidato.idioma, max_palabras)
+                ]
+        return piezas_de[candidato.chunk_id]
 
-        if subdividir_largos:
-            piezas = subdividir(candidato.texto, max_palabras=max_palabras)
-        else:
-            piezas = [recortar_a_limite(candidato.texto, max_palabras=max_palabras)]
-
-        for pieza in piezas:
-            if len(salida) >= top or por_doc.get(candidato.doc_id, 0) >= max_por_doc:
-                break
+    def emitir(candidato: Candidato, respetar_tope: bool) -> None:
+        for pieza in piezas(candidato)[emitidas.get(candidato.chunk_id, 0) :]:
+            if len(salida) >= top:
+                return
+            if respetar_tope and por_doc.get(candidato.doc_id, 0) >= max_por_doc:
+                return
             salida.append(
                 {
                     "rank": len(salida) + 1,
@@ -147,6 +163,18 @@ def construir_fragmentos(
                 }
             )
             por_doc[candidato.doc_id] = por_doc.get(candidato.doc_id, 0) + 1
+            emitidas[candidato.chunk_id] = emitidas.get(candidato.chunk_id, 0) + 1
+
+    for candidato in candidatos:
+        if len(salida) >= top:
+            break
+        emitir(candidato, respetar_tope=True)
+
+    if len(salida) < top:
+        for candidato in candidatos:
+            if len(salida) >= top:
+                break
+            emitir(candidato, respetar_tope=False)
 
     return salida
 

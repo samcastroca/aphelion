@@ -73,7 +73,17 @@ ENCODER_PRINCIPAL = "bge-m3"
 
 # --- Chunking -------------------------------------------------------------
 
-CHUNK_TOKENS = 512
+CHUNK_TOKENS = 512  # ventana del modelo más corto (mE5-large)
+
+# La ventana de 512 de mE5 incluye lo que el fragmento no trae: los tokens
+# especiales (<s>, </s>) y el prefijo "passage: " con que E5 exige codificar los
+# pasajes. Un fragmento presupuestado a 512 tokens de contenido entra al modelo
+# con ~518 y pierde la cola en silencio. La reserva descuenta ese sobrecoste del
+# presupuesto de fragmentación; la ventana del modelo (y del grafo ONNX) sigue
+# siendo CHUNK_TOKENS.
+RESERVA_TOKENS_ENCODER = 8
+CHUNK_PRESUPUESTO = CHUNK_TOKENS - RESERVA_TOKENS_ENCODER
+
 CHUNK_SOLAPE = 0.15
 MIN_TOKENS_FRAGMENTO = 10  # por debajo son restos de tabla, no contenido
 MAX_PALABRAS_FRAGMENTO = 250  # límite que impone el reto
@@ -126,6 +136,13 @@ CANDIDATOS_POR_INDICE = 200
 RRF_K0 = 60
 MAX_FRAGMENTOS_POR_DOC = 3  # diversificación del top-10
 BOOST_FENOMENO = 1.05  # multiplicador suave, no filtro duro
+
+# Post-filtro de la §8.7: descarta de cada índice los candidatos cuya similitud
+# quede por debajo de esta fracción de la mejor de esa consulta en ese índice.
+# Es relativo y no absoluto porque las escalas de coseno de BGE-M3 y mE5 no son
+# comparables (mE5 comprime todo hacia 0,75–0,92). None lo desactiva; el valor
+# se decide en el barrido, no a priori.
+UMBRAL_RELATIVO: float | None = None
 
 # Correspondencia consulta -> fenómeno, según el orden del archivo de preguntas.
 RANGOS_FENOMENO = {1: (1, 16), 2: (17, 32), 3: (33, 50)}

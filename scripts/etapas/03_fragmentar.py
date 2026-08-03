@@ -70,7 +70,7 @@ def _procesar(ruta: str) -> tuple[str, list[dict]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max-tokens", type=int, default=config.CHUNK_TOKENS)
+    ap.add_argument("--max-tokens", type=int, default=config.CHUNK_PRESUPUESTO)
     ap.add_argument("--salida", type=Path, default=config.FRAGMENTOS)
     ap.add_argument("--encoder", default=config.ENCODER_PRINCIPAL)
     ap.add_argument("--procesos", type=int, default=max(1, (os.cpu_count() or 4) - 1))

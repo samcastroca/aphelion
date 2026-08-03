@@ -103,6 +103,13 @@ MAX_FRAGMENTS_PER_DOC = 3
 PHENOMENON_BOOST = 1.05
 MAX_WORDS_PER_FRAGMENT = 250
 
+# Post-filtro de la §8.7: descarta de cada índice los candidatos cuya similitud
+# quede por debajo de esta fracción de la mejor de esa consulta en ese índice.
+# Relativo y no absoluto porque las escalas de coseno de los dos encoders no son
+# comparables. None lo desactiva; el valor sale del barrido, y tiene que ser el
+# mismo con el que se generaron los resultados entregados.
+RELATIVE_THRESHOLD: float | None = None
+
 # Un fragmento largo se puede partir en varios, cada uno ocupando su posición, o
 # recortar. Probamos las dos: partir entrega menos texto (84k palabras por
 # corrida frente a 104k) y cubre 6 fragmentos distintos en vez de 10, porque la
@@ -347,12 +354,33 @@ class Candidate:
     text: str
     fuente: str
     fenomeno: int
+    idioma: str = "es"  # del fragmento; decide el segmentador al recortar
     score: float = 0.0
     ranks: dict[str, int] = field(default_factory=dict)
 
 
+def filter_by_relative_threshold(
+    ranking: list[tuple[dict, float]], threshold: float | None
+) -> list[tuple[dict, float]]:
+    """Post-filtro de la §8.7: descarta la cola de baja similitud de un índice.
+
+    El umbral es relativo al mejor candidato de esa consulta en ese índice.
+    Como el ranking viene ordenado de mayor a menor, equivale a un k adaptativo
+    por consulta y no altera las posiciones de lo que conserva.
+    """
+    if not threshold or not ranking:
+        return ranking
+
+    tope = ranking[0][1]
+    if tope <= 0:  # sin señal utilizable, mejor no filtrar nada
+        return ranking
+
+    corte = threshold * tope
+    return [(meta, sim) for meta, sim in ranking if sim >= corte]
+
+
 def fuse_rrf(
-    rankings: dict[str, list[dict]], k0: int = RRF_K0
+    rankings: dict[str, list[tuple[dict, float]]], k0: int = RRF_K0
 ) -> list[Candidate]:
     """Fusiona los rankings de los dos índices con Reciprocal Rank Fusion.
 
@@ -366,7 +394,7 @@ def fuse_rrf(
     pooled: dict[str, Candidate] = {}
 
     for encoder, ranking in rankings.items():
-        for rank, meta in enumerate(ranking, start=1):
+        for rank, (meta, _score) in enumerate(ranking, start=1):
             chunk_id = meta["chunk_id"]
             candidate = pooled.get(chunk_id)
             if candidate is None:
@@ -376,6 +404,7 @@ def fuse_rrf(
                     text=meta["texto"],
                     fuente=meta.get("fuente", ""),
                     fenomeno=meta.get("fenomeno", 0),
+                    idioma=meta.get("idioma") or "es",
                 )
                 pooled[chunk_id] = candidate
             candidate.score += 1.0 / (k0 + rank)
@@ -471,22 +500,31 @@ def aggregate_to_documents(
     corto que trae la respuesta exacta con 0,85. Con alertas de un párrafo y
     atlas de cientos de páginas en el mismo corpus, ese sesgo sería grave.
 
+    La agregación va por `fuente` y no por `doc_id`: el jurado empareja los
+    documentos por `fuente` (§10.2.1), y el corpus tiene 59 nombres repetidos en
+    186 archivos — dos doc_id con la misma fuente en el top-3 cuentan como un
+    solo acierto posible y desperdician una posición. De cada fuente se reporta
+    el doc_id de su mejor fragmento.
+
     El número de fragmentos solo desempata, con un peso lo bastante pequeño para
     no alterar el orden principal.
     """
     best: dict[str, float] = {}
     count: dict[str, int] = {}
+    holder: dict[str, str] = {}  # fuente -> doc_id del mejor fragmento
 
     for candidate in candidates:
-        previous = best.get(candidate.doc_id)
+        key = candidate.fuente or candidate.doc_id
+        previous = best.get(key)
         if previous is None or candidate.score > previous:
-            best[candidate.doc_id] = candidate.score
-        count[candidate.doc_id] = count.get(candidate.doc_id, 0) + 1
+            best[key] = candidate.score
+            holder[key] = candidate.doc_id
+        count[key] = count.get(key, 0) + 1
 
     ordered = sorted(
         best.items(), key=lambda kv: (kv[1], count[kv[0]] * 1e-9), reverse=True
     )
-    return [doc_id for doc_id, _ in ordered[:top]]
+    return [holder[key] for key, _ in ordered[:top]]
 
 
 class Retriever:
@@ -497,6 +535,7 @@ class Retriever:
         boost: float = PHENOMENON_BOOST,
         max_per_doc: int = MAX_FRAGMENTS_PER_DOC,
         candidates_per_index: int = CANDIDATES_PER_INDEX,
+        threshold: float | None = RELATIVE_THRESHOLD,
     ):
         if not indices:
             raise ValueError("no hay índices cargados")
@@ -505,6 +544,7 @@ class Retriever:
         self.boost = boost
         self.max_per_doc = max_per_doc
         self.candidates_per_index = candidates_per_index
+        self.threshold = threshold
         self._encoders: dict[str, QueryEncoder] = {}
 
     def _encoder(self, name: str) -> QueryEncoder:
@@ -513,12 +553,13 @@ class Retriever:
         return self._encoders[name]
 
     def retrieve(self, query: Query) -> tuple[list[str], list[Candidate]]:
-        rankings: dict[str, list[dict]] = {}
+        rankings: dict[str, list[tuple[dict, float]]] = {}
 
         for name, index in self.indices.items():
             vector = self._encoder(name).encode([query.text])[0]
             hits = index.search(vector, self.candidates_per_index)
-            rankings[name] = [index.metadata[pos] for pos, _score in hits]
+            ranking = [(index.metadata[pos], score) for pos, score in hits]
+            rankings[name] = filter_by_relative_threshold(ranking, self.threshold)
 
         candidates = fuse_rrf(rankings, self.k0)
         candidates = apply_phenomenon_boost(candidates, query.phenomenon, self.boost)
@@ -527,8 +568,12 @@ class Retriever:
         # fragmentos, que es lo que mide NDCG@10. La deduplicación se aplica solo
         # ahí: dos documentos distintos pueden compartir un texto y descartar uno
         # lo volvería inalcanzable. La agregación usa el conjunto completo.
+        #
+        # Se pasan más candidatos de los que se publican: la construcción de la
+        # salida puede descartar piezas por el tope por documento, y con
+        # repuestos reales a mano no tiene que rellenar repitiendo fragmentos.
         fragments = diversify(
-            drop_duplicates(candidates), TOP_FRAGMENTS, self.max_per_doc
+            drop_duplicates(candidates), TOP_FRAGMENTS * 3, self.max_per_doc
         )
         documents = aggregate_to_documents(candidates, TOP_DOCUMENTS)
 
@@ -539,15 +584,22 @@ class Retriever:
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[^\s])")
 
+# pysbd trae reglas para estos tres; para el resto se usa el segmentador inglés,
+# el más conservador ante abreviaturas desconocidas. Mismo mapa que usó el
+# fragmentador al construir el índice.
+_PYSBD_LANGUAGES = {"es", "en", "pt"}
 
-def split_sentences(text: str) -> list[str]:
+
+def split_sentences(text: str, language: str = "es") -> list[str]:
     """Segmenta en oraciones para poder recortar sin partir ninguna.
 
-    Usa pysbd, que es lo que usó el fragmentador, y si no está recurre a una
-    expresión regular sobre la puntuación, para que el script siga corriendo sin
-    esa dependencia. Las dos respetan los párrafos: nunca unen texto de párrafos
-    distintos en una misma oración.
+    Usa pysbd con el idioma del fragmento —las abreviaturas que reconoce
+    dependen del idioma, y el 87% del corpus está en inglés—, y si no está
+    recurre a una expresión regular sobre la puntuación, para que el script siga
+    corriendo sin esa dependencia. Las dos respetan los párrafos: nunca unen
+    texto de párrafos distintos en una misma oración.
     """
+    lang = language if language in _PYSBD_LANGUAGES else "en"
     sentences: list[str] = []
     for paragraph in text.split("\n\n"):
         paragraph = paragraph.strip()
@@ -556,7 +608,7 @@ def split_sentences(text: str) -> list[str]:
         try:
             import pysbd
 
-            pieces = pysbd.Segmenter(language="es", clean=False).segment(paragraph)
+            pieces = pysbd.Segmenter(language=lang, clean=False).segment(paragraph)
         except Exception:
             pieces = _SENTENCE_SPLIT.split(paragraph)
         sentences.extend(p.strip() for p in pieces if p and p.strip())
@@ -567,7 +619,9 @@ def word_count(text: str) -> int:
     return len(text.split())
 
 
-def split_to_limit(text: str, max_words: int = MAX_WORDS_PER_FRAGMENT) -> list[str]:
+def split_to_limit(
+    text: str, max_words: int = MAX_WORDS_PER_FRAGMENT, language: str = "es"
+) -> list[str]:
     """Parte un fragmento en piezas de como máximo `max_words`, sin cortar
     ninguna oración por la mitad.
 
@@ -582,7 +636,7 @@ def split_to_limit(text: str, max_words: int = MAX_WORDS_PER_FRAGMENT) -> list[s
     accumulated: list[str] = []
     total = 0
 
-    for sentence in split_sentences(text):
+    for sentence in split_sentences(text, language):
         n = word_count(sentence)
 
         if n > max_words:
@@ -616,6 +670,12 @@ def build_record(
     encima de 250 palabras. El `chunk_id` que se reporta sigue siendo el del
     fragmento original del índice aunque se haya recortado: sirve para trazar de
     dónde salió el texto, no para emparejar con el ground truth.
+
+    El tope por documento es firme mientras haya alternativa y cede cuando no la
+    hay: si la primera pasada deja posiciones vacías, una segunda las rellena
+    con piezas aún no emitidas ignorando el tope. Un fragmento real de un
+    documento ya representado informa más que repetir el último para completar
+    el esquema, que queda como último recurso.
     """
     docs = [
         {"rank": i, "doc_id": doc_id}
@@ -627,24 +687,21 @@ def build_record(
     # llevarse seis de las diez, que es justo lo que la diversificación evita.
     frags: list[dict] = []
     per_doc: dict[str, int] = {}
+    pieces_of: dict[str, list[str]] = {}  # chunk_id -> piezas calculadas una vez
+    emitted: dict[str, int] = {}  # chunk_id -> cuántas piezas suyas ya salieron
 
-    for candidate in fragments:
-        if len(frags) >= TOP_FRAGMENTS:
-            break
-        if per_doc.get(candidate.doc_id, 0) >= MAX_FRAGMENTS_PER_DOC:
-            continue
+    def pieces(candidate: Candidate) -> list[str]:
+        if candidate.chunk_id not in pieces_of:
+            split = split_to_limit(candidate.text, language=candidate.idioma)
+            pieces_of[candidate.chunk_id] = split if SPLIT_LONG_FRAGMENTS else split[:1]
+        return pieces_of[candidate.chunk_id]
 
-        pieces = (
-            split_to_limit(candidate.text)
-            if SPLIT_LONG_FRAGMENTS
-            else split_to_limit(candidate.text)[:1]
-        )
-        for piece in pieces:
-            if (
-                len(frags) >= TOP_FRAGMENTS
-                or per_doc.get(candidate.doc_id, 0) >= MAX_FRAGMENTS_PER_DOC
-            ):
-                break
+    def emit(candidate: Candidate, respect_cap: bool) -> None:
+        for piece in pieces(candidate)[emitted.get(candidate.chunk_id, 0) :]:
+            if len(frags) >= TOP_FRAGMENTS:
+                return
+            if respect_cap and per_doc.get(candidate.doc_id, 0) >= MAX_FRAGMENTS_PER_DOC:
+                return
             frags.append(
                 {
                     "rank": len(frags) + 1,
@@ -656,10 +713,22 @@ def build_record(
                 }
             )
             per_doc[candidate.doc_id] = per_doc.get(candidate.doc_id, 0) + 1
+            emitted[candidate.chunk_id] = emitted.get(candidate.chunk_id, 0) + 1
+
+    for candidate in fragments:
+        if len(frags) >= TOP_FRAGMENTS:
+            break
+        emit(candidate, respect_cap=True)
+
+    if len(frags) < TOP_FRAGMENTS:
+        for candidate in fragments:
+            if len(frags) >= TOP_FRAGMENTS:
+                break
+            emit(candidate, respect_cap=False)
 
     # The schema demands exactly 3 documents and 10 fragments; a short list is
     # discarded by the automatic evaluator. Padding only triggers on pathological
-    # queries where the index returns very few candidates.
+    # queries where the whole pool runs out of distinct pieces.
     while docs and len(docs) < TOP_DOCUMENTS:
         docs.append({"rank": len(docs) + 1, "doc_id": docs[-1]["doc_id"]})
     while frags and len(frags) < TOP_FRAGMENTS:

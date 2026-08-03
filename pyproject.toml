@@ -11,7 +11,6 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "faiss-cpu>=1.14.3",
-    "lxml>=6.1.1",
     "mapbox-vector-tile>=2.2.0",
     "numpy>=2.5.1",
     "openpyxl>=3.1.5",
