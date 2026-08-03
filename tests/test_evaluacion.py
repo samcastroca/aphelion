@@ -16,14 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from aphelion.metricas import intervalo_bootstrap
+from aphelion.evaluacion.metricas import intervalo_bootstrap
 
 RAIZ = Path(__file__).resolve().parents[1]
 
 
 def cargar_pool():
     """El script del pool no es un módulo del paquete; se carga por ruta."""
-    ruta = RAIZ / "scripts" / "05_pool_anotacion.py"
+    ruta = RAIZ / "scripts" / "analisis" / "pool_anotacion.py"
     spec = importlib.util.spec_from_file_location("pool_anotacion", ruta)
     modulo = importlib.util.module_from_spec(spec)
     sys.modules["pool_anotacion"] = modulo

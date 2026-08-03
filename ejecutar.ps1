@@ -7,11 +7,11 @@
     la build de PyTorch que corresponda y lanza el pipeline.
 
     Antes de ejecutar hace falta una sola cosa manual: copiar el corpus de ADL a
-        datos\CORPUS CODEFEST AD ASTRA 2026\
+        data\CORPUS CODEFEST AD ASTRA 2026\
 
 .EXAMPLE
     .\ejecutar.ps1
-    .\ejecutar.ps1 -Desde 03_indexar:bge-m3    # reanudar tras un fallo
+    .\ejecutar.ps1 -Desde 04_indexar:bge-m3    # reanudar tras un fallo
     .\ejecutar.ps1 -SoloEntorno                # preparar sin procesar nada
 #>
 [CmdletBinding()]
@@ -40,50 +40,47 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 Bien (uv --version)
 
 Paso "Corpus"
-$corpus = "datos\CORPUS CODEFEST AD ASTRA 2026"
+$corpus = "data\CORPUS CODEFEST AD ASTRA 2026"
 if (-not (Test-Path $corpus)) {
     Write-Host "  Falta el corpus de ADL. Cópialo a:" -ForegroundColor Red
-    Write-Host "    $((Resolve-Path 'datos').Path)\CORPUS CODEFEST AD ASTRA 2026\" -ForegroundColor Red
+    Write-Host "    $((Resolve-Path 'data').Path)\CORPUS CODEFEST AD ASTRA 2026\" -ForegroundColor Red
     exit 1
 }
 $n = (Get-ChildItem $corpus -Recurse -File | Measure-Object).Count
 Bien "$n archivos"
 
-Paso "Dependencias"
-uv sync
+Paso "GPU y dependencias"
+# El extra decide de qué índice sale torch, así que la GPU se detecta antes de
+# sincronizar: instalar torch aparte no serviría, porque el `uv run` siguiente
+# vuelve a alinear el entorno con el lock y lo reemplazaría.
+$nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+$radeon = if ($nvidia) { $null } else {
+    Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match "Radeon" }
+}
+
+if ($nvidia) {
+    Bien "NVIDIA detectada: $(& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1)"
+    uv sync --extra cuda
+} elseif ($radeon) {
+    Aviso "Radeon detectada: $($radeon.Name). Usando ONNX Runtime + DirectML."
+    uv sync --extra amd
+} else {
+    Aviso "Sin GPU detectada. La codificación irá por CPU y tardará días."
+    uv sync
+}
 if ($LASTEXITCODE -ne 0) { throw "uv sync falló" }
 
-Paso "GPU"
-$nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($nvidia) {
-    $gpu = (& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1)
-    Bien "NVIDIA detectada: $gpu"
-
     $cuda = uv run python -c "import torch; print(torch.cuda.is_available())" 2>$null
-    if ($cuda -ne "True") {
-        Aviso "PyTorch no ve la GPU. Instalando la build CUDA 12.8..."
-        # cu128 o superior es obligatorio en Blackwell (sm_120); las anteriores
-        # fallan con un 'no kernel image is available' que despista.
-        uv pip install torch --index-url https://download.pytorch.org/whl/cu128
-        $cuda = uv run python -c "import torch; print(torch.cuda.is_available())" 2>$null
-    }
     if ($cuda -eq "True") {
         Bien (uv run python -c "import torch; print('torch', torch.__version__, torch.cuda.get_device_name(0))")
     } else {
-        Aviso "PyTorch sigue sin ver la GPU. Revisa el driver o la versión de Python."
-    }
-} else {
-    $radeon = Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match "Radeon" }
-    if ($radeon) {
-        Aviso "Radeon detectada: $($radeon.Name). Usando ONNX Runtime + DirectML."
-        uv sync --extra amd
-    } else {
-        Aviso "Sin GPU detectada. La codificación irá por CPU y tardará días."
+        Aviso "PyTorch no ve la GPU pese a la build CUDA. Revisa el driver."
     }
 }
 
 Paso "Tesseract (OCR)"
-$cacheOcr = "datos\ocr.jsonl"
+$cacheOcr = "data\ocr.jsonl"
 $enCache = if (Test-Path $cacheOcr) { (Get-Content $cacheOcr | Measure-Object -Line).Lines } else { 0 }
 if (Get-Command tesseract -ErrorAction SilentlyContinue) {
     Bien (tesseract --version | Select-Object -First 1)

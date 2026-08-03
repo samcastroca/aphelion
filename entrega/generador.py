@@ -62,7 +62,7 @@ DEFAULT_OUTPUT = HERE / "resultados.jsonl"
 def _default_queries() -> Path:
     candidates = (
         HERE / "Extracto_Preguntas_50_v2.pdf",
-        HERE.parent / "datos" / "Extracto_Preguntas_50_v2.pdf",
+        HERE.parent / "data" / "Extracto_Preguntas_50_v2.pdf",
     )
     for candidate in candidates:
         if candidate.exists():

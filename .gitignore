@@ -16,5 +16,5 @@ entrega/*
 
 # Corpus provisto por ADL (3 GB). El inventario, las preguntas y la
 # especificación sí se versionan: sin ellos el pipeline no arranca.
-datos/CORPUS CODEFEST AD ASTRA 2026/
+data/CORPUS CODEFEST AD ASTRA 2026/
 *.zip

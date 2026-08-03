@@ -12,9 +12,9 @@ from __future__ import annotations
 import pytest
 
 from aphelion import config
-from aphelion.recuperacion import Candidato
-from aphelion.salida import construir_fragmentos, resultado_a_dict, subdividir
-from aphelion.recuperacion import Resultado
+from aphelion.busqueda.recuperacion import Candidato
+from aphelion.busqueda.salida import construir_fragmentos, resultado_a_dict, subdividir
+from aphelion.busqueda.recuperacion import Resultado
 
 LIMITE = config.MAX_PALABRAS_FRAGMENTO
 

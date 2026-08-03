@@ -293,7 +293,7 @@ entrega/
 
 De esos cuatro elementos, `generador.py` es el único que es código fuente: vive
 versionado en `entrega/` porque es donde el reto lo exige, y hay una sola copia.
-Los otros tres son artefactos que produce `scripts/empaquetar.py` y no se
+Los otros tres son artefactos que produce `scripts/etapas/05_empaquetar.py` y no se
 versionan.
 
 **Reproducibilidad.** `generador.py` carga los índices persistidos, lee el archivo de
@@ -309,8 +309,8 @@ construyó el índice.
 
 El precio es tener la política de recuperación escrita dos veces:
 `aphelion.recuperacion` para iterar durante el desarrollo, y el entregable.
-`scripts/verificar_generador.py` corre ambas sobre el mismo índice y exige
-salidas idénticas, para que no puedan divergir en silencio. `empaquetar.py`
+`scripts/etapas/06_verificar.py` corre ambas sobre el mismo índice y exige
+salidas idénticas, para que no puedan divergir en silencio. `05_empaquetar.py`
 ejecuta el generador desde dentro de `entrega/`, de modo que lo que se valida es
 el entregable resolviendo sus rutas como lo hará el evaluador.
 
@@ -409,7 +409,7 @@ aparecería como recuperación mediocre. Al generarlo desde
 
 | Riesgo | Mitigación |
 |---|---|
-| El entregable no arranca fuera del repositorio → exclusión | `generador.py` vive en `entrega/` y es autónomo; `empaquetar.py` lo ejecuta desde ahí, con las rutas que verá el jurado |
+| El entregable no arranca fuera del repositorio → exclusión | `generador.py` vive en `entrega/` y es autónomo; `05_empaquetar.py` lo ejecuta desde ahí, con las rutas que verá el jurado |
 | El OCR por VLM cae bajo la prohibición de decoders → exclusión | Se usa Tesseract; el VLM queda descartado y la decisión se declara en el informe |
 | OCR que falla en silencio e inyecta ruido en el índice | Tres señales por documento (diacríticos, no imprimibles, palabras/página) y revisión manual de lo que las dispare |
 | Caché de embeddings reutilizada entre corridas distintas → índice desalineado | La ruta de caché lleva la huella del archivo de fragmentos; además se verifica el tamaño de cada bloque al cargarlo |

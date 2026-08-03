@@ -6,7 +6,7 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 # Insumos provistos por ADL. El corpus (3 GB) no se versiona; el inventario, las
 # preguntas y la especificación sí, porque el pipeline no arranca sin ellos.
-DATOS = RAIZ / "datos"
+DATOS = RAIZ / "data"
 CORPUS = DATOS / "CORPUS CODEFEST AD ASTRA 2026"
 INVENTARIO = DATOS / "Indice_Datos_Codefest.xlsx"
 PREGUNTAS_PDF = DATOS / "Extracto_Preguntas_50_v2.pdf"

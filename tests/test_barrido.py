@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from aphelion.recuperacion import Candidato, fusionar_combsum, fusionar_rrf
+from aphelion.busqueda.recuperacion import Candidato, fusionar_combsum, fusionar_rrf
 
 RAIZ = Path(__file__).resolve().parents[1]
 
 
 def cargar_barrido():
-    ruta = RAIZ / "scripts" / "06_barrido.py"
+    ruta = RAIZ / "scripts" / "analisis" / "barrido.py"
     spec = importlib.util.spec_from_file_location("barrido", ruta)
     modulo = importlib.util.module_from_spec(spec)
     sys.modules["barrido"] = modulo

@@ -15,7 +15,7 @@ import math
 
 import pytest
 
-from aphelion.metricas import Juicio, dcg, evaluar, f1_at_k, ndcg_at_k
+from aphelion.evaluacion.metricas import Juicio, dcg, evaluar, f1_at_k, ndcg_at_k
 
 
 class TestDCG:
