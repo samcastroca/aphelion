@@ -152,7 +152,21 @@ Campos obligatorios (Tabla 1 de la especificación) más extensiones propias:
 | `doc_id`, `fuente`, `fenomeno` | Inventario ADL |
 | `chunk_id` | `{doc_id}-chunk-{posicion:04d}` |
 | `formato`, `posicion`, `num_tokens`, `texto` | Derivados de la ingesta |
-| `idioma`, `observatorio`, `ruta`, `titulo`, `fecha` | Extensiones para post-filtros |
+| `idioma`, `observatorio`, `ruta`, `titulo` | Extensiones para post-filtros |
+
+Los nombres de los ocho obligatorios son los que fija la Tabla 1, literalmente, y
+no se traducen: renombrarlos equivale a no emitirlos. Los cuatro añadidos sí son
+libres —la §3.4 los autoriza y los ejemplifica en español—, y van en español por
+coherencia con los otros ocho. `tests/test_metadata.py` fija ambas cosas.
+
+**Sobre `texto` "sin modificaciones".** La Tabla 1 lo describe así, mientras la
+§2.2 exige limpieza y normalización: las dos cosas no pueden cumplirse a la letra
+a la vez. Se interpreta que prohíbe reescribir o resumir el fragmento, no
+normalizarlo, porque de lo contrario la §2.2 no tendría contenido posible. Lo que
+se aplica es conservador y reversible en significado: NFC, ligaduras tipográficas
+que PyMuPDF conserva (`ﬁ` → `fi`), caracteres de control, espacios redundantes,
+encabezados repetidos detectados por frecuencia y numeración de página. No se
+pasa a minúsculas, no se quitan tildes y no se toca ninguna palabra del cuerpo.
 
 ---
 
