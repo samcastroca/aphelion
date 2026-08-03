@@ -197,6 +197,14 @@ def main() -> int:
 
     fragmentos = leer_fragmentos(args.fragmentos)
     print(f"fragmentos: {len(fragmentos):,}")
+    if not fragmentos:
+        # Un archivo vacío queda si la fragmentación se interrumpió: la abre en
+        # modo escritura y la trunca antes de empezar. Sin esto, la corrida sigue
+        # adelante, carga los modelos, exporta el ONNX y muere más tarde por otra
+        # cosa, con el motivo real dos pantallas atrás.
+        print(f"{args.fragmentos} está vacío; la fragmentación no llegó a terminar.")
+        print("Vuelve a ejecutar scripts/etapas/03_fragmentar.py")
+        return 1
     textos = [f["texto"] for f in fragmentos]
 
     if args.backend == "onnx":

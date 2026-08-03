@@ -35,7 +35,13 @@ dependencies = [
 # con NVIDIA sobra, y `optimum` no se usa porque su resolución de dependencias
 # entra en conflicto con transformers 5.x.
 #     uv sync --extra amd
-amd = ["onnxruntime-directml>=1.24"]
+#
+# `onnx` no es redundante con `onnxruntime-directml`: el primero es el formato y
+# el segundo el motor, y no se arrastran entre sí. Hace falta para exportar el
+# modelo la primera vez —`torch.onnx.export` lo importa al final, después de
+# haber trazado la red entera— y sin él la corrida muere con "Module onnx is not
+# installed!" tras un minuto de trabajo tirado.
+amd = ["onnx>=1.20", "onnxruntime-directml>=1.24"]
 
 # Codificación por GPU en NVIDIA. Las ruedas de PyPI para Windows son solo CPU,
 # así que la build con CUDA hay que pedirla al índice de PyTorch.
