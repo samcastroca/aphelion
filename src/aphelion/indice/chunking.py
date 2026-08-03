@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import pysbd
+from tokenizers import Tokenizer
 
 from .. import config
 
@@ -62,14 +63,21 @@ def _segmentador(idioma: str) -> pysbd.Segmenter:
 
 
 @lru_cache(maxsize=4)
-def _tokenizador(nombre_encoder: str):
-    from transformers import AutoTokenizer
+def _tokenizador(nombre_encoder: str) -> Tokenizer:
+    """Carga el tokenizador por el backend Rust, no por `transformers`.
 
-    return AutoTokenizer.from_pretrained(config.ENCODERS[nombre_encoder]["modelo"])
+    Los ids son los mismos —ambos leen el `tokenizer.json` del encoder—, pero
+    `transformers` importa torch de forma transitiva y eso son ~1,35 GiB de
+    memoria comprometida por proceso. Fragmentar reparte el trabajo entre un
+    proceso por núcleo, así que ese peso se multiplica por el número de workers
+    y agota la memoria comprometible antes de leer el primer documento: el
+    cargador de DLL de Windows aborta con `WinError 1455`. Por aquí son ~24 MiB.
+    """
+    return Tokenizer.from_pretrained(config.ENCODERS[nombre_encoder]["modelo"])
 
 
-def _contar(tokenizador, texto: str) -> int:
-    return len(tokenizador.encode(texto, add_special_tokens=False))
+def _contar(tokenizador: Tokenizer, texto: str) -> int:
+    return len(tokenizador.encode(texto, add_special_tokens=False).ids)
 
 
 def dividir_en_oraciones(texto: str, idioma: str) -> list[str]:
@@ -111,7 +119,7 @@ def _recortar_tabular(texto: str, max_tokens: int) -> str:
     return texto[: corte if corte > 0 else presupuesto]
 
 
-def _partir_por_tokens(texto: str, tokenizador, presupuesto: int) -> list[str]:
+def _partir_por_tokens(texto: str, tokenizador: Tokenizer, presupuesto: int) -> list[str]:
     """Corta un texto en ventanas de `presupuesto` tokens usando offsets.
 
     Se tokeniza una sola vez y se cortan ventanas sobre el mapa de offsets. La
@@ -119,10 +127,7 @@ def _partir_por_tokens(texto: str, tokenizador, presupuesto: int) -> list[str]:
     corpus contiene bloques de más de 140.000 tokens (mapas PBF, filas de CSV
     muy anchas) donde esa diferencia decide si el proceso termina o no.
     """
-    codificado = tokenizador(
-        texto, add_special_tokens=False, return_offsets_mapping=True
-    )
-    offsets = codificado["offset_mapping"]
+    offsets = tokenizador.encode(texto, add_special_tokens=False).offsets
     if not offsets:
         return []
 
@@ -142,7 +147,7 @@ def _partir_por_tokens(texto: str, tokenizador, presupuesto: int) -> list[str]:
     return trozos
 
 
-def _partir_oracion_larga(oracion: str, tokenizador, presupuesto: int) -> list[str]:
+def _partir_oracion_larga(oracion: str, tokenizador: Tokenizer, presupuesto: int) -> list[str]:
     """Último recurso: una sola oración que excede el presupuesto del modelo.
 
     Ocurre con tablas volcadas a texto y con filas de CSV muy anchas, que no
@@ -183,7 +188,7 @@ def _partir_oracion_larga(oracion: str, tokenizador, presupuesto: int) -> list[s
 
 def agrupar(
     oraciones: list[str],
-    tokenizador,
+    tokenizador: Tokenizer,
     max_tokens: int = config.CHUNK_TOKENS,
     solape: float = config.CHUNK_SOLAPE,
     max_fragmentos: int | None = None,
@@ -243,7 +248,7 @@ def agrupar(
 
 
 def _verificar_presupuesto(
-    fragmentos: list[tuple[str, int]], tokenizador, max_tokens: int
+    fragmentos: list[tuple[str, int]], tokenizador: Tokenizer, max_tokens: int
 ) -> list[tuple[str, int]]:
     """Reconta los fragmentos que rozan el límite y parte los que lo exceden.
 
