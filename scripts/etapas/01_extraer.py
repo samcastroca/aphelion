@@ -34,7 +34,6 @@ def main() -> int:
         docs = [d for d in docs if d.formato in formatos]
 
     estados: Counter[str] = Counter()
-    pendientes_ocr: list[str] = []
     errores: list[tuple[str, str]] = []
     total_chars = 0
 
@@ -51,7 +50,6 @@ def main() -> int:
             errores.append((doc.doc_id, res.error))
         elif res.necesita_ocr:
             estados["necesita_ocr"] += 1
-            pendientes_ocr.append(doc.doc_id)
         elif res.vacia:
             estados["vacio"] += 1
         else:
@@ -77,10 +75,12 @@ def main() -> int:
         print(f"  {estado:<14} {n:>5}")
     print(f"  {'chars':<14} {total_chars:>5,}")
 
-    if pendientes_ocr:
-        lista = config.TRABAJO / "pendientes_ocr.txt"
-        lista.write_text("\n".join(pendientes_ocr), encoding="utf-8")
-        print(f"\n{len(pendientes_ocr)} documentos requieren OCR -> {lista}")
+    # Qué documentos necesitan OCR queda anotado en su propio JSON, y la etapa
+    # siguiente lo lee de ahí. No se escribe ninguna lista aparte: sería un hecho
+    # sobre esta corrida y no sobre la caché, y en cuanto la extracción estuviera
+    # cacheada —que es lo normal al reanudar— saldría vacía.
+    if estados["necesita_ocr"]:
+        print(f"\n{estados['necesita_ocr']} documentos requieren OCR")
 
     if errores:
         print(f"\n{len(errores)} errores:")

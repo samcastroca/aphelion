@@ -221,8 +221,9 @@ de mezclar vectores de dos corridas distintas.
 ### OCR
 
 60 PDFs no tienen capa de texto; 48 son informes escaneados de la Defensoría, que
-responden las consultas q033–q050. `scripts/etapas/01_extraer.py` los detecta y los lista
-en `trabajo/pendientes_ocr.txt`.
+responden las consultas q033–q050. `scripts/etapas/01_extraer.py` los detecta y los
+marca con `necesita_ocr` en su JSON de `trabajo/texto/`, de donde los lee la etapa
+siguiente.
 
 Se usa **Tesseract** (`spa+eng`: no todos los escaneados están en español). Se
 descartó el OCR por modelo de visión-lenguaje: la §4.2 prohíbe arquitecturas
