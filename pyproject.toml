@@ -21,10 +21,13 @@ dependencies = [
     "pysbd>=0.3.4",
     "pytesseract>=0.3.13",
     "sentence-transformers>=5.6.1",
-    "torch>=2.13.0",
     "tqdm>=4.70.0",
     "transformers>=5.14.1",
 ]
+
+# torch no aparece arriba a propósito: entra igual como dependencia de
+# sentence-transformers, y declararlo en la base impediría que el extra `cuda`
+# lo resuelva desde otro índice.
 
 [project.optional-dependencies]
 # Codificación por GPU en Radeon (RDNA2 y posteriores) bajo Windows, vía el
@@ -33,6 +36,43 @@ dependencies = [
 # entra en conflicto con transformers 5.x.
 #     uv sync --extra amd
 amd = ["onnxruntime-directml>=1.24"]
+
+# Codificación por GPU en NVIDIA. Las ruedas de PyPI para Windows son solo CPU,
+# así que la build con CUDA hay que pedirla al índice de PyTorch.
+#     uv sync --extra cuda
+cuda = ["torch>=2.13.0"]
+
+# El par opuesto de `cuda`. Existe para que el lock guarde las dos procedencias
+# de torch: sin él, uv unifica la resolución y todas las máquinas —incluida la
+# Radeon— acabarían bajando los ~3 GB de ruedas CUDA.
+cpu = ["torch>=2.13.0"]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
+
+[tool.uv.sources]
+# Instalar torch a mano con `uv pip install --index-url ...` no funciona: el
+# siguiente `uv run` sincroniza contra el lock, ve una versión que no es la
+# fijada y reinstala encima la rueda CPU de PyPI. La procedencia tiene que estar
+# en el lock, y esto es lo que la pone ahí.
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu130", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+# cu130 y no cu128: el canal cu128 se quedó en torch 2.11 y este proyecto exige
+# 2.13. Blackwell (sm_120) queda cubierto igual, la condición real era CUDA
+# >= 12.8. `explicit` mantiene el índice restringido a torch: el resto de
+# paquetes sigue viniendo de PyPI.
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
