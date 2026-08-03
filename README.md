@@ -142,6 +142,23 @@ la build de PyTorch que corresponda y construye la entrega entera:
 
 Lo único manual es copiar el corpus de ADL a `data\CORPUS CODEFEST AD ASTRA 2026\`.
 
+Sin parámetros hace lo correcto: los dos encoders, el backend que le toque al
+hardware y el lote que mejor rinda en él. Los parámetros están para desviarse de
+eso a propósito:
+
+```powershell
+.\ejecutar.ps1 -Encoders bge-m3            # un solo índice, la mitad de tiempo
+.\ejecutar.ps1 -Backend torch -Lote 32     # forzar backend y lote
+.\ejecutar.ps1 -Desde 04_indexar:bge-m3    # reanudar tras un fallo
+.\ejecutar.ps1 -SinOcr                     # sin pasar por Tesseract
+.\ejecutar.ps1 -SoloEntorno                # preparar sin procesar nada
+.\ejecutar.ps1 -Forzar                     # seguir pese a los avisos de entorno
+```
+
+Con `-Encoders bge-m3` se llega antes a un índice utilizable, a costa de perder
+la fusión de los dos espacios vectoriales. `-Lote` solo suele hacer falta para
+bajarlo si la GPU se queda sin memoria.
+
 Si prefieres saltarte el arranque y llamar al pipeline directamente:
 
 ```bash

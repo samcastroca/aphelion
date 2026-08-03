@@ -9,16 +9,42 @@
     Antes de ejecutar hace falta una sola cosa manual: copiar el corpus de ADL a
         data\CORPUS CODEFEST AD ASTRA 2026\
 
+    Sin parámetros hace lo correcto: los dos encoders, el backend que le
+    corresponda al hardware y el lote que mejor rinda en él. Los parámetros están
+    para desviarse de eso a propósito.
+
+.PARAMETER Encoders
+    Qué encoders indexar. Por defecto los dos. Con uno solo se llega antes a un
+    índice utilizable, a costa de perder la fusión de los dos espacios.
+
+.PARAMETER Backend
+    torch (CUDA o CPU) u onnx (DirectML, GPU Radeon). Por defecto lo elige el
+    hardware presente.
+
+.PARAMETER Lote
+    Fragmentos por lote de codificación. Por defecto 8 en DirectML y 128 en CUDA.
+    Bájalo si la GPU se queda sin memoria.
+
 .EXAMPLE
     .\ejecutar.ps1
     .\ejecutar.ps1 -Desde 04_indexar:bge-m3    # reanudar tras un fallo
     .\ejecutar.ps1 -SoloEntorno                # preparar sin procesar nada
+
+    .\ejecutar.ps1 -Encoders bge-m3            # un solo encoder
+    .\ejecutar.ps1 -Encoders bge-m3,me5-large -Lote 64
+    .\ejecutar.ps1 -Backend torch -Lote 32     # forzar el backend
 #>
 [CmdletBinding()]
 param(
     [string]$Desde,
+    [string[]]$Encoders,
+    [ValidateSet('auto', 'torch', 'onnx')]
+    [string]$Backend,
+    [ValidateRange(1, 1024)]
+    [int]$Lote,
     [switch]$SoloEntorno,
-    [switch]$SinOcr
+    [switch]$SinOcr,
+    [switch]$Forzar
 )
 
 $ErrorActionPreference = "Stop"
@@ -98,9 +124,15 @@ if ($SoloEntorno) {
 }
 
 Paso "Pipeline"
+# Los nombres de encoder no se validan aquí: los define config.ENCODERS y es
+# pipeline.py quien los comprueba, antes de tocar nada.
 $argumentos = @("run", "python", "scripts/pipeline.py")
 if ($Desde) { $argumentos += @("--desde", $Desde) }
+if ($Encoders) { $argumentos += @("--encoders", ($Encoders -join ",")) }
+if ($Backend) { $argumentos += @("--backend", $Backend) }
+if ($Lote) { $argumentos += @("--lote", $Lote) }
 if ($SinOcr) { $argumentos += "--sin-ocr" }
+if ($Forzar) { $argumentos += "--forzar" }
 
 & uv @argumentos
 exit $LASTEXITCODE
