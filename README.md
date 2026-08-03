@@ -142,14 +142,30 @@ la build de PyTorch que corresponda y construye la entrega entera:
 
 Lo único manual es copiar el corpus de ADL a `data\CORPUS CODEFEST AD ASTRA 2026\`.
 
-Sin parámetros hace lo correcto: los dos encoders, el backend que le toque al
-hardware y el lote que mejor rinda en él. Los parámetros están para desviarse de
-eso a propósito:
+Sin parámetros pregunta qué hacer, para no tener que recordar ninguna opción:
+
+```
+=== Qué quieres hacer ===
+  1) Construir la entrega completa                    (lo normal)
+  2) Codificar solo mi parte, repartiendo entre varias PCs
+  3) Reanudar desde una etapa                         (tras un fallo)
+  4) Solo preparar el entorno, sin procesar nada
+  Elige [1]:
+```
+
+Elegir la 2 pregunta entre cuántas máquinas se reparte y cuál es esta, y calcula
+el tramo solo — sin que nadie tenga que repartir porcentajes a mano ni comprobar
+que suman 100. Después pregunta qué encoders indexar. Enter en todo deja lo de
+siempre.
+
+Con cualquier parámetro no pregunta nada y corre directo:
 
 ```powershell
+.\ejecutar.ps1 -Auto                       # todo por defecto, sin menú
 .\ejecutar.ps1 -Encoders bge-m3            # un solo índice, la mitad de tiempo
 .\ejecutar.ps1 -Backend torch -Lote 32     # forzar backend y lote
 .\ejecutar.ps1 -Desde 04_indexar:bge-m3    # reanudar tras un fallo
+.\ejecutar.ps1 -Reparto 0:50               # su tramo, en el reparto entre PCs
 .\ejecutar.ps1 -SinOcr                     # sin pasar por Tesseract
 .\ejecutar.ps1 -SoloEntorno                # preparar sin procesar nada
 .\ejecutar.ps1 -Forzar                     # seguir pese a los avisos de entorno
@@ -240,6 +256,9 @@ en lugar de mezclar vectores de dos corridas distintas.
 Esa caché por bloques es lo que permite partir la etapa cara. Cada máquina toma
 un porcentaje del corpus, y los tramos no tienen que ser iguales: quien tenga
 mejor GPU carga con más.
+
+Lo más fácil es `.\ejecutar.ps1` y elegir la opción 2: pregunta entre cuántas
+máquinas se reparte y cuál es esta, y saca el tramo solo. A mano es lo mismo:
 
 ```powershell
 .\ejecutar.ps1 -Reparto 0:50      # en la máquina rápida

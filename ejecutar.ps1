@@ -9,9 +9,12 @@
     Antes de ejecutar hace falta una sola cosa manual: copiar el corpus de ADL a
         data\CORPUS CODEFEST AD ASTRA 2026\
 
-    Sin parámetros hace lo correcto: los dos encoders, el backend que le
-    corresponda al hardware y el lote que mejor rinda en él. Los parámetros están
-    para desviarse de eso a propósito.
+    Sin parámetros pregunta qué hacer con un menú, para no tener que recordar
+    ninguna opción. Con cualquier parámetro —o con -Auto— no pregunta nada y
+    corre directo, que es lo que necesitan la documentación y una tarea
+    programada. Sin consola tampoco pregunta: toma los valores por defecto, que
+    son los dos encoders, el backend que le corresponda al hardware y el lote que
+    mejor rinda en él.
 
 .PARAMETER Encoders
     Qué encoders indexar. Por defecto los dos. Con uno solo se llega antes a un
@@ -34,7 +37,8 @@
     deben cubrir de 0 a 100 sin solaparse.
 
 .EXAMPLE
-    .\ejecutar.ps1
+    .\ejecutar.ps1                             # menú: elige y listo
+    .\ejecutar.ps1 -Auto                       # sin preguntar, todo por defecto
     .\ejecutar.ps1 -Desde 04_indexar:bge-m3    # reanudar tras un fallo
     .\ejecutar.ps1 -SoloEntorno                # preparar sin procesar nada
 
@@ -59,7 +63,8 @@ param(
     [switch]$SinOcr,
     [switch]$Forzar,
     [ValidatePattern('^\d+(\.\d+)?:\d+(\.\d+)?$')]
-    [string]$Reparto
+    [string]$Reparto,
+    [switch]$Auto
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,6 +73,29 @@ Set-Location $PSScriptRoot
 function Paso($texto) { Write-Host "`n=== $texto ===" -ForegroundColor Cyan }
 function Aviso($texto) { Write-Host "  ! $texto" -ForegroundColor Yellow }
 function Bien($texto) { Write-Host "  $texto" -ForegroundColor Green }
+
+function Leer($pregunta, $porDefecto) {
+    # Sin consola —una tarea programada, una tubería— Read-Host no lee nada. Que
+    # devuelva el valor por defecto y no reviente: sin parámetros el guion tiene
+    # que seguir construyendo la entrega entera, como siempre.
+    try { $r = Read-Host "  $pregunta [$porDefecto]" } catch { return $porDefecto }
+    if ([string]::IsNullOrWhiteSpace($r)) { return $porDefecto }
+    return $r.Trim()
+}
+
+function Elegir($titulo, [string[]]$opciones, $porDefecto = 1) {
+    Paso $titulo
+    for ($i = 0; $i -lt $opciones.Count; $i++) {
+        Write-Host ("  {0}) {1}" -f ($i + 1), $opciones[$i])
+    }
+    while ($true) {
+        $r = Leer "Elige" $porDefecto
+        if ($r -match '^\d+$' -and [int]$r -ge 1 -and [int]$r -le $opciones.Count) {
+            return [int]$r
+        }
+        Aviso "Escribe un número entre 1 y $($opciones.Count)."
+    }
+}
 
 Paso "Comprobando uv"
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
@@ -79,6 +107,90 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     }
 }
 Bien (uv --version)
+
+Paso "GPU"
+# Se detecta antes que nada porque decide dos cosas: de qué índice sale torch, y
+# qué le muestra el menú a quien esté delante.
+$nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+$radeon = if ($nvidia) { $null } else {
+    Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match "Radeon" }
+}
+
+if ($nvidia) {
+    $gpu = (& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1)
+    Bien "$gpu  ->  CUDA"
+} elseif ($radeon) {
+    Bien "$($radeon.Name)  ->  ONNX Runtime + DirectML"
+} else {
+    Aviso "Sin GPU. La codificación irá por CPU y tardará días."
+}
+
+# El menú aparece solo cuando nadie pidió nada por parámetro. Con cualquier
+# parámetro —o con -Auto— el guion corre sin preguntar, que es lo que necesitan
+# una tarea programada y la documentación.
+if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
+    switch (Elegir "Qué quieres hacer" @(
+            "Construir la entrega completa                    (lo normal)"
+            "Codificar solo mi parte, repartiendo entre varias PCs"
+            "Reanudar desde una etapa                         (tras un fallo)"
+            "Solo preparar el entorno, sin procesar nada"
+        )) {
+        2 {
+            $maquinas = [int](Leer "¿Entre cuántas máquinas?" 3)
+            if ($maquinas -lt 2) { $maquinas = 2 }
+            $cual = [int](Leer "¿Cuál de ellas es esta? (1-$maquinas)" 1)
+            if ($cual -lt 1 -or $cual -gt $maquinas) { $cual = 1 }
+
+            # Tramos iguales por defecto. Como el reparto se redondea sobre el
+            # número de bloques, tramos contiguos cubren todo exactamente una vez
+            # sin que las máquinas tengan que acordar nada más.
+            $ini = [math]::Round(($cual - 1) * 100 / $maquinas, 3)
+            $fin = [math]::Round($cual * 100 / $maquinas, 3)
+            $Reparto = "${ini}:${fin}"
+            Bien "Le toca el tramo $Reparto"
+
+            if ((Leer "¿Ajustarlo a mano, si esta máquina es más rápida? (s/N)" "n") -match '^[sSyY]') {
+                $Reparto = Leer "Tramo A:B" $Reparto
+            }
+        }
+        3 {
+            # Los nombres los define pipeline.py; si alguno dejara de existir, es
+            # él quien lo dice y lista los válidos antes de tocar nada.
+            $etapas = @(
+                "01_extraer", "02_ocr", "03_fragmentar",
+                "04_indexar", "05_empaquetar", "06_verificar"
+            )
+            $elegida = Elegir "Desde qué etapa" @(
+                "Extracción del texto"
+                "OCR de los escaneados"
+                "Limpieza y fragmentación"
+                "Codificación e índice   (la etapa larga)"
+                "Empaquetado de la entrega"
+                "Verificación del entregable"
+            ) 4
+            $Desde = $etapas[$elegida - 1]
+        }
+        4 { $SoloEntorno = [switch]$true }
+    }
+
+    if (-not $SoloEntorno) {
+        $Encoders = switch (Elegir "Qué encoders indexar" @(
+                "Los dos: bge-m3 y me5-large   (mejor recuperación, el doble de tiempo)"
+                "Solo bge-m3                   (la mitad de tiempo)"
+                "Solo me5-large"
+            )) {
+            2 { @("bge-m3") }
+            3 { @("me5-large") }
+            default { $null }
+        }
+        # Al reanudar desde la codificación hay que decirle a qué encoder, o
+        # `--desde 04_indexar` no encaja con ninguna etapa del plan.
+        if ($Desde -eq "04_indexar") {
+            $primero = if ($Encoders) { $Encoders[0] } else { "bge-m3" }
+            $Desde = "04_indexar:$primero"
+        }
+    }
+}
 
 if ($Reparto) {
     # Quien solo codifica un tramo no parte del corpus, sino del archivo de
@@ -104,23 +216,14 @@ if ($Reparto) {
     Bien "$n archivos"
 }
 
-Paso "GPU y dependencias"
-# El extra decide de qué índice sale torch, así que la GPU se detecta antes de
-# sincronizar: instalar torch aparte no serviría, porque el `uv run` siguiente
-# vuelve a alinear el entorno con el lock y lo reemplazaría.
-$nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-$radeon = if ($nvidia) { $null } else {
-    Get-CimInstance Win32_VideoController | Where-Object { $_.Name -match "Radeon" }
-}
-
+Paso "Dependencias"
+# El extra decide de qué índice sale torch. Instalarlo aparte no serviría: el
+# `uv run` siguiente vuelve a alinear el entorno con el lock y lo reemplazaría.
 if ($nvidia) {
-    Bien "NVIDIA detectada: $(& nvidia-smi --query-gpu=name --format=csv,noheader | Select-Object -First 1)"
     uv sync --extra cuda
 } elseif ($radeon) {
-    Aviso "Radeon detectada: $($radeon.Name). Usando ONNX Runtime + DirectML."
     uv sync --extra amd
 } else {
-    Aviso "Sin GPU detectada. La codificación irá por CPU y tardará días."
     uv sync
 }
 if ($LASTEXITCODE -ne 0) { throw "uv sync falló" }

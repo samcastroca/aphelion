@@ -81,6 +81,28 @@ class TestTramoDeBloques:
         with pytest.raises(SystemExit):
             indexar.tramo_de_bloques(reparto, 31)
 
+    @pytest.mark.parametrize("maquinas", [2, 3, 4, 5])
+    @pytest.mark.parametrize("total", [7, 31, 47, 100])
+    def test_el_reparto_en_partes_iguales_del_menu_particiona(self, maquinas, total):
+        """El menú de `ejecutar.ps1` reparte en partes iguales con esta fórmula.
+
+        Está aquí y no en PowerShell porque lo que hay que comprobar es que los
+        porcentajes que produce caen en bloques disjuntos y completos, y quien
+        traduce porcentajes a bloques es esta función. Si el redondeo dejara un
+        hueco, una máquina entregaría vectores que no cubren su parte y la
+        coordinadora tendría que recodificarla sin enterarse de por qué.
+        """
+        tramos = [
+            f"{round((i - 1) * 100 / maquinas, 3)}:{round(i * 100 / maquinas, 3)}"
+            for i in range(1, maquinas + 1)
+        ]
+
+        cubierto: list[int] = []
+        for tramo in tramos:
+            cubierto += list(indexar.tramo_de_bloques(tramo, total))
+
+        assert cubierto == list(range(total)), f"tramos {tramos} sobre {total} bloques"
+
     def test_un_tramo_estrecho_puede_quedar_vacio(self):
         # Con pocos bloques, un 1% no alcanza a ninguno. El script lo detecta y
         # avisa en vez de dar la vuelta como si hubiera hecho su parte.
