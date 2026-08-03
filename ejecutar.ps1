@@ -268,8 +268,26 @@ if ($Reparto) {
     Paso "Fragmentos"
     $fragmentos = "trabajo\fragmentos.jsonl"
     if (-not (Test-Path $fragmentos)) {
-        Write-Host "  Falta $fragmentos. Cópialo de la máquina coordinadora a:" -ForegroundColor Red
-        Write-Host "    $PSScriptRoot\trabajo\" -ForegroundColor Red
+        Write-Host "  Falta $fragmentos, y sin él no hay tramo que codificar." -ForegroundColor Red
+        # Con el corpus delante, lo más probable es que esta sea la máquina
+        # coordinadora y que el reparto no sea lo que toca todavía: primero se
+        # genera el archivo aquí, y solo entonces las otras pueden repartirse.
+        if (Test-Path "data\CORPUS CODEFEST AD ASTRA 2026") {
+            Write-Host ""
+            Write-Host "  Esta máquina tiene el corpus, así que es la que lo genera." -ForegroundColor Yellow
+            Write-Host "  Las etapas hasta la fragmentación, sin entrar en la codificación:" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "    uv run python scripts/etapas/01_extraer.py" -ForegroundColor Yellow
+            Write-Host "    uv run python scripts/etapas/02_ocr.py" -ForegroundColor Yellow
+            Write-Host "    uv run python scripts/etapas/03_fragmentar.py" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  Después copia $fragmentos a las otras máquinas y allí" -ForegroundColor Yellow
+            Write-Host "  sí elige el reparto. Tiene que ser el mismo archivo en todas:" -ForegroundColor Yellow
+            Write-Host "  copiado, no regenerado en cada una." -ForegroundColor Yellow
+        } else {
+            Write-Host "  Cópialo de la máquina coordinadora a:" -ForegroundColor Yellow
+            Write-Host "    $PSScriptRoot\trabajo\" -ForegroundColor Yellow
+        }
         exit 1
     }
     Bien ("{0:N0} MB" -f ((Get-Item $fragmentos).Length / 1MB))
