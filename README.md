@@ -231,9 +231,51 @@ mientras el otro prepara el entorno.
 
 Cada etapa cachea su salida, así que interrumpir y reanudar no cuesta trabajo
 perdido. La codificación guarda bloques de 2048 fragmentos en
-`trabajo/embeddings/<encoder>/<huella>/`, donde `huella` identifica el archivo de
-fragmentos que los originó: cambiar la fragmentación invalida la caché en lugar
-de mezclar vectores de dos corridas distintas.
+`trabajo/embeddings/<encoder>-<backend>/<huella>/`, donde `huella` identifica el
+archivo de fragmentos que los originó: cambiar la fragmentación invalida la caché
+en lugar de mezclar vectores de dos corridas distintas.
+
+### Repartir la codificación entre varias máquinas
+
+Esa caché por bloques es lo que permite partir la etapa cara. Cada máquina toma
+un porcentaje del corpus, y los tramos no tienen que ser iguales: quien tenga
+mejor GPU carga con más.
+
+```powershell
+.\ejecutar.ps1 -Reparto 0:50      # en la máquina rápida
+.\ejecutar.ps1 -Reparto 50:75     # en la segunda
+.\ejecutar.ps1 -Reparto 75:100    # en la tercera
+```
+
+Con `-Reparto` la máquina no extrae, no fragmenta y no empaqueta: solo codifica
+sus bloques y se detiene. No necesita el corpus ni Tesseract.
+
+**Las tres tienen que partir del mismo `trabajo/fragmentos.jsonl`, copiado y no
+regenerado.** Basta con que a una le falte un documento por reconocer para que su
+bloque 7 contenga otros textos, y sus vectores no encajarían con los de nadie. El
+script imprime la huella del archivo al arrancar; si no coincide en las tres,
+paren ahí.
+
+Al terminar, cada una manda su carpeta de `.npy` a la coordinadora. Se juntan
+todos en la misma ruta —`trabajo/embeddings/<encoder>-<backend>/<huella>/`— y una
+corrida normal los encuentra cacheados y arma el índice en segundos:
+
+```bash
+uv run python scripts/pipeline.py --desde 04_indexar:bge-m3
+```
+
+Antes de codificar, esa corrida dice cuántos bloques tiene y cuáles faltan. Si
+falta alguno lo codifica ella misma, que es lo correcto, pero conviene verlo
+antes de que la GPU se ponga a rellenar un tramo que nunca llegó.
+
+Cuánto se transporta: unos 258 MB de vectores por encoder (63.000 fragmentos ×
+1024 dimensiones × 4 bytes), o sea ~86 MB por máquina y encoder. Antes hay que
+mandarles los 285 MB de `fragmentos.jsonl`.
+
+**Conviene medir antes de repartir.** Si la máquina con GPU hace su encoder en
+media hora, repartir para ahorrar veinte minutos no compensa la coordinación. La
+opción existe para cuando las tres son comparables, o cuando quien tiene el
+corpus es la máquina lenta. Corre un bloque y mira los frag/s que imprime.
 
 ### OCR
 

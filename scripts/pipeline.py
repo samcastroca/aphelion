@@ -14,10 +14,16 @@ tras una interrupción no repite trabajo hecho.
 El orden no es negociable: el OCR tiene que correr **antes** de fragmentar, o los
 documentos escaneados entran al índice vacíos.
 
+Con `--reparto A:B` esta máquina codifica solo el tramo A%-B% de los bloques y
+se detiene ahí: no extrae, no fragmenta y no empaqueta. Sirve para repartir la
+etapa cara entre varias máquinas con capacidad distinta, y exige que
+`trabajo/fragmentos.jsonl` llegue copiado de la coordinadora.
+
 Uso:
     uv run python scripts/pipeline.py
     uv run python scripts/pipeline.py --desde 04_indexar    # reanudar
     uv run python scripts/pipeline.py --sin-ocr             # sin Tesseract instalado
+    uv run python scripts/pipeline.py --reparto 40:70       # solo su tramo
 """
 
 from __future__ import annotations
@@ -61,20 +67,36 @@ def detectar_backend() -> tuple[str, str]:
 
 
 def etapas(
-    encoders: list[str], sin_ocr: bool, backend: str, lote: int | None
+    encoders: list[str],
+    sin_ocr: bool,
+    backend: str,
+    lote: int | None,
+    reparto: str | None = None,
 ) -> list[tuple[str, list[str]]]:
-    plan: list[tuple[str, list[str]]] = [
-        ("01_extraer", [str(ETAPAS / "01_extraer.py")]),
-    ]
-    if not sin_ocr:
-        plan.append(("02_ocr", [str(ETAPAS / "02_ocr.py")]))
-    plan.append(("03_fragmentar", [str(ETAPAS / "03_fragmentar.py")]))
+    plan: list[tuple[str, list[str]]] = []
+
+    # Con reparto, las etapas previas no se corren: `fragmentos.jsonl` llega
+    # copiado desde la máquina coordinadora, y regenerarlo aquí produciría otro
+    # archivo —basta con que falte un documento por reconocer— y por tanto otros
+    # bloques. Los vectores que esta máquina devolviera no encajarían con nada.
+    if not reparto:
+        plan.append(("01_extraer", [str(ETAPAS / "01_extraer.py")]))
+        if not sin_ocr:
+            plan.append(("02_ocr", [str(ETAPAS / "02_ocr.py")]))
+        plan.append(("03_fragmentar", [str(ETAPAS / "03_fragmentar.py")]))
 
     for encoder in encoders:
         comando = [str(ETAPAS / "04_indexar.py"), "--encoder", encoder, "--backend", backend]
         if lote:
             comando += ["--lote", str(lote)]
+        if reparto:
+            comando += ["--reparto", reparto]
         plan.append((f"04_indexar:{encoder}", comando))
+
+    # Sin el índice completo no hay nada que empaquetar ni que verificar: esta
+    # máquina solo aporta su tramo de vectores.
+    if reparto:
+        return plan
 
     plan.append(("05_empaquetar", [str(ETAPAS / "05_empaquetar.py")]))
     # Última etapa y no opcional: que `generador.py` reproduzca lo que produce el
@@ -90,7 +112,11 @@ def etapas(
 
 
 def comprobar_entorno(
-    encoders: list[str], sin_ocr: bool, backend: str, motivo: str
+    encoders: list[str],
+    sin_ocr: bool,
+    backend: str,
+    motivo: str,
+    reparto: str | None = None,
 ) -> list[str]:
     """Todo lo que puede fallar tarde, comprobado temprano.
 
@@ -98,6 +124,21 @@ def comprobar_entorno(
     el fallo que este proyecto no se puede permitir.
     """
     avisos: list[str] = []
+
+    # Una máquina que solo codifica su tramo no necesita el corpus ni Tesseract:
+    # necesita exactamente el archivo de fragmentos que produjo la coordinadora.
+    if reparto:
+        if not config.FRAGMENTOS.exists():
+            avisos.append(
+                f"no existe {config.FRAGMENTOS}: con --reparto tiene que llegar "
+                "copiado de la máquina coordinadora, no regenerado aquí"
+            )
+        for encoder in encoders:
+            if encoder not in config.ENCODERS:
+                avisos.append(f"encoder desconocido: {encoder}")
+        if "CPU" in motivo:
+            avisos.append("sin GPU utilizable: repartir la codificación no arregla eso")
+        return avisos
 
     if not config.CORPUS.exists():
         avisos.append(f"no existe el corpus en {config.CORPUS}")
@@ -152,6 +193,11 @@ def main() -> int:
     )
     ap.add_argument("--lote", type=int, help="tamaño de lote de codificación")
     ap.add_argument(
+        "--reparto",
+        metavar="A:B",
+        help="codifica solo el tramo A%%-B%% de los bloques, para repartir entre máquinas",
+    )
+    ap.add_argument(
         "--forzar",
         action="store_true",
         help="sigue aunque la comprobación de entorno encuentre problemas",
@@ -179,7 +225,7 @@ def main() -> int:
     else:
         lote = None
 
-    plan = etapas(encoders, args.sin_ocr, backend, lote)
+    plan = etapas(encoders, args.sin_ocr, backend, lote, args.reparto)
 
     if args.desde:
         nombres = [n for n, _ in plan]
@@ -189,7 +235,7 @@ def main() -> int:
         plan = plan[nombres.index(args.desde) :]
 
     print("\ncomprobando entorno ...")
-    avisos = comprobar_entorno(encoders, args.sin_ocr, backend, motivo)
+    avisos = comprobar_entorno(encoders, args.sin_ocr, backend, motivo, args.reparto)
     if avisos:
         for aviso in avisos:
             print(f"  ! {aviso}")

@@ -25,6 +25,14 @@
     Fragmentos por lote de codificación. Por defecto 8 en DirectML y 128 en CUDA.
     Bájalo si la GPU se queda sin memoria.
 
+.PARAMETER Reparto
+    Porcentaje de los bloques que codifica esta máquina, como A:B. Se detiene
+    ahí: no extrae, no fragmenta y no empaqueta, así que no necesita el corpus ni
+    Tesseract — necesita el archivo trabajo\fragmentos.jsonl copiado de la
+    máquina coordinadora, el mismo en las tres. Los tramos no tienen que ser
+    iguales, quien tenga mejor GPU carga con más porcentaje, pero entre todos
+    deben cubrir de 0 a 100 sin solaparse.
+
 .EXAMPLE
     .\ejecutar.ps1
     .\ejecutar.ps1 -Desde 04_indexar:bge-m3    # reanudar tras un fallo
@@ -33,6 +41,11 @@
     .\ejecutar.ps1 -Encoders bge-m3            # un solo encoder
     .\ejecutar.ps1 -Encoders bge-m3,me5-large -Lote 64
     .\ejecutar.ps1 -Backend torch -Lote 32     # forzar el backend
+
+    # Reparto entre tres máquinas, la primera con el doble de GPU que las otras:
+    .\ejecutar.ps1 -Reparto 0:50               # en la máquina rápida
+    .\ejecutar.ps1 -Reparto 50:75              # en la segunda
+    .\ejecutar.ps1 -Reparto 75:100             # en la tercera
 #>
 [CmdletBinding()]
 param(
@@ -44,7 +57,9 @@ param(
     [int]$Lote,
     [switch]$SoloEntorno,
     [switch]$SinOcr,
-    [switch]$Forzar
+    [switch]$Forzar,
+    [ValidatePattern('^\d+(\.\d+)?:\d+(\.\d+)?$')]
+    [string]$Reparto
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,15 +80,29 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 Bien (uv --version)
 
-Paso "Corpus"
-$corpus = "data\CORPUS CODEFEST AD ASTRA 2026"
-if (-not (Test-Path $corpus)) {
-    Write-Host "  Falta el corpus de ADL. Cópialo a:" -ForegroundColor Red
-    Write-Host "    $((Resolve-Path 'data').Path)\CORPUS CODEFEST AD ASTRA 2026\" -ForegroundColor Red
-    exit 1
+if ($Reparto) {
+    # Quien solo codifica un tramo no parte del corpus, sino del archivo de
+    # fragmentos que ya produjo la coordinadora. Regenerarlo aquí daría otro
+    # archivo y sus vectores no encajarían con los de nadie.
+    Paso "Fragmentos"
+    $fragmentos = "trabajo\fragmentos.jsonl"
+    if (-not (Test-Path $fragmentos)) {
+        Write-Host "  Falta $fragmentos. Cópialo de la máquina coordinadora a:" -ForegroundColor Red
+        Write-Host "    $PSScriptRoot\trabajo\" -ForegroundColor Red
+        exit 1
+    }
+    Bien ("{0:N0} MB" -f ((Get-Item $fragmentos).Length / 1MB))
+} else {
+    Paso "Corpus"
+    $corpus = "data\CORPUS CODEFEST AD ASTRA 2026"
+    if (-not (Test-Path $corpus)) {
+        Write-Host "  Falta el corpus de ADL. Cópialo a:" -ForegroundColor Red
+        Write-Host "    $((Resolve-Path 'data').Path)\CORPUS CODEFEST AD ASTRA 2026\" -ForegroundColor Red
+        exit 1
+    }
+    $n = (Get-ChildItem $corpus -Recurse -File | Measure-Object).Count
+    Bien "$n archivos"
 }
-$n = (Get-ChildItem $corpus -Recurse -File | Measure-Object).Count
-Bien "$n archivos"
 
 Paso "GPU y dependencias"
 # El extra decide de qué índice sale torch, así que la GPU se detecta antes de
@@ -105,16 +134,19 @@ if ($nvidia) {
     }
 }
 
-Paso "Tesseract (OCR)"
-$cacheOcr = "data\ocr.jsonl"
-$enCache = if (Test-Path $cacheOcr) { (Get-Content $cacheOcr | Measure-Object -Line).Lines } else { 0 }
-if (Get-Command tesseract -ErrorAction SilentlyContinue) {
-    Bien (tesseract --version | Select-Object -First 1)
-} elseif (Test-Path "C:\Program Files\Tesseract-OCR\tesseract.exe") {
-    Bien "instalado en Program Files"
-} else {
-    Aviso "Tesseract no está. $enCache documentos vienen ya reconocidos en la caché."
-    Aviso "Para los que falten: winget install UB-Mannheim.TesseractOCR (con el paquete 'spa')"
+# Con reparto no se extrae nada, así que el OCR no entra en juego.
+if (-not $Reparto) {
+    Paso "Tesseract (OCR)"
+    $cacheOcr = "data\ocr.jsonl"
+    $enCache = if (Test-Path $cacheOcr) { (Get-Content $cacheOcr | Measure-Object -Line).Lines } else { 0 }
+    if (Get-Command tesseract -ErrorAction SilentlyContinue) {
+        Bien (tesseract --version | Select-Object -First 1)
+    } elseif (Test-Path "C:\Program Files\Tesseract-OCR\tesseract.exe") {
+        Bien "instalado en Program Files"
+    } else {
+        Aviso "Tesseract no está. $enCache documentos vienen ya reconocidos en la caché."
+        Aviso "Para los que falten: winget install UB-Mannheim.TesseractOCR (con el paquete 'spa')"
+    }
 }
 
 if ($SoloEntorno) {
@@ -133,6 +165,18 @@ if ($Backend) { $argumentos += @("--backend", $Backend) }
 if ($Lote) { $argumentos += @("--lote", $Lote) }
 if ($SinOcr) { $argumentos += "--sin-ocr" }
 if ($Forzar) { $argumentos += "--forzar" }
+if ($Reparto) { $argumentos += @("--reparto", $Reparto) }
 
 & uv @argumentos
-exit $LASTEXITCODE
+$codigo = $LASTEXITCODE
+
+if ($Reparto -and $codigo -eq 0) {
+    Paso "Tramo listo"
+    Write-Host "  Manda a la máquina coordinadora los .npy de:" -ForegroundColor Green
+    Get-ChildItem "trabajo\embeddings" -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object { Get-ChildItem $_.FullName -Directory } |
+        ForEach-Object { Write-Host "    $($_.FullName)" -ForegroundColor Green }
+    Write-Host "  Allí se juntan con los tramos de las otras y se arma el índice." -ForegroundColor Green
+}
+
+exit $codigo

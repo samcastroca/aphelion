@@ -5,8 +5,21 @@ interrupción no obliga a recodificar el corpus completo. Esto importa porque la
 codificación es la etapa cara y se ejecuta en una máquina distinta a la de
 desarrollo.
 
+Esa misma caché por bloques permite repartir la codificación entre varias
+máquinas: `--reparto 0:40` codifica el primer 40% de los bloques y no construye
+el índice. Cada máquina se queda con un tramo, los `.npy` se juntan en una sola
+carpeta y una corrida sin `--reparto` los encuentra cacheados y arma el índice
+en segundos. Los tramos no tienen que ser iguales: quien tenga mejor GPU carga
+con más porcentaje.
+
+La condición que no se puede saltar es que las tres máquinas partan del **mismo**
+`fragmentos.jsonl`, distribuido como archivo y no regenerado en cada una. La
+huella que da nombre a la carpeta de caché lo delata —dos archivos distintos dan
+dos carpetas distintas— pero conviene compararla antes de gastar la GPU.
+
 Uso:
     uv run python scripts/etapas/04_indexar.py [--encoder bge-m3] [--lote 32]
+    uv run python scripts/etapas/04_indexar.py --reparto 0:40    # solo su tramo
 """
 
 from __future__ import annotations
@@ -45,21 +58,52 @@ def huella(ruta: Path) -> str:
     return h.hexdigest()
 
 
-def codificar_por_lotes(
+FRAG_POR_BLOQUE = 2048
+
+
+def numero_de_bloques(n_fragmentos: int) -> int:
+    return (n_fragmentos + FRAG_POR_BLOQUE - 1) // FRAG_POR_BLOQUE
+
+
+def tramo_de_bloques(reparto: str, total_bloques: int) -> range:
+    """'0:40' -> los bloques que caen en el primer 40% del corpus.
+
+    Los extremos se redondean hacia abajo sobre el total de bloques, así que
+    tramos contiguos —0:40, 40:70, 70:100— cubren todos los bloques exactamente
+    una vez sin que las máquinas tengan que ponerse de acuerdo en nada más.
+    """
+    try:
+        crudo_inicio, crudo_fin = reparto.split(":")
+        p_inicio, p_fin = float(crudo_inicio), float(crudo_fin)
+    except ValueError:
+        raise SystemExit(f"--reparto mal formado: {reparto!r}. Se espera algo como 0:40")
+
+    if not 0 <= p_inicio < p_fin <= 100:
+        raise SystemExit(f"--reparto fuera de rango: {reparto!r}. Se espera 0 <= a < b <= 100")
+
+    return range(
+        int(total_bloques * p_inicio / 100),
+        int(total_bloques * p_fin / 100),
+    )
+
+
+def codificar_bloques(
     encoder: encoders.Encoder,
     textos: list[str],
     cache: Path,
     tam_lote: int,
-    frag_por_bloque: int = 2048,
-) -> np.ndarray:
-    """Codifica en bloques persistidos, reanudable ante interrupciones."""
+    bloques: range,
+) -> list[np.ndarray]:
+    """Codifica los bloques pedidos, saltando los que ya estén en la caché."""
     cache.mkdir(parents=True, exist_ok=True)
-    bloques: list[np.ndarray] = []
+    total_bloques = numero_de_bloques(len(textos))
+    codificados: list[np.ndarray] = []
+    pendientes = [n for n in bloques if not (cache / f"bloque_{n:05d}.npy").exists()]
+    hechos_ahora = 0
 
-    total_bloques = (len(textos) + frag_por_bloque - 1) // frag_por_bloque
-    for n in range(total_bloques):
-        inicio = n * frag_por_bloque
-        trozo = textos[inicio : inicio + frag_por_bloque]
+    for n in bloques:
+        inicio = n * FRAG_POR_BLOQUE
+        trozo = textos[inicio : inicio + FRAG_POR_BLOQUE]
 
         destino = cache / f"bloque_{n:05d}.npy"
         if destino.exists():
@@ -69,26 +113,30 @@ def codificar_por_lotes(
             if len(cacheado) != len(trozo):
                 raise ValueError(
                     f"{destino} tiene {len(cacheado)} vectores y se esperaban "
-                    f"{len(trozo)}. Borra la carpeta {cache} y recodifica."
+                    f"{len(trozo)}. Borra ese archivo y recodifícalo."
                 )
-            bloques.append(cacheado)
+            codificados.append(cacheado)
             continue
 
         t0 = time.time()
         bloque = encoder.codificar_pasajes(trozo, tam_lote=tam_lote, progreso=False)
         np.save(destino, bloque)
-        bloques.append(bloque)
+        codificados.append(bloque)
+        hechos_ahora += 1
 
-        hechos = min(inicio + frag_por_bloque, len(textos))
         velocidad = len(trozo) / max(time.time() - t0, 1e-6)
-        restante = (len(textos) - hechos) / max(velocidad, 1e-6)
+        faltan = sum(len(textos[m * FRAG_POR_BLOQUE :][:FRAG_POR_BLOQUE]) for m in pendientes[hechos_ahora:])
         print(
-            f"  bloque {n + 1}/{total_bloques}  {hechos:,}/{len(textos):,} fragmentos"
-            f"  ({velocidad:.0f} frag/s, faltan ~{restante / 60:.1f} min)",
+            f"  bloque {n + 1}/{total_bloques}  {hechos_ahora}/{len(pendientes)} de este tramo"
+            f"  ({velocidad:.0f} frag/s, faltan ~{faltan / max(velocidad, 1e-6) / 60:.1f} min)",
             flush=True,
         )
 
-    return np.vstack(bloques)
+    return codificados
+
+
+def bloques_faltantes(cache: Path, total_bloques: int) -> list[int]:
+    return [n for n in range(total_bloques) if not (cache / f"bloque_{n:05d}.npy").exists()]
 
 
 def main() -> int:
@@ -101,6 +149,11 @@ def main() -> int:
         choices=("torch", "onnx"),
         default="torch",
         help="onnx usa la GPU Radeon vía DirectML (uv sync --extra amd)",
+    )
+    ap.add_argument(
+        "--reparto",
+        metavar="A:B",
+        help="codifica solo el tramo A%%-B%% de los bloques y no construye el índice",
     )
     args = ap.parse_args()
 
@@ -142,16 +195,38 @@ def main() -> int:
 
     # La caché depende del backend: mezclar bloques de PyTorch y de DirectML
     # dejaría el índice con vectores de dos procedencias distintas.
-    cache = (
-        config.TRABAJO
-        / "embeddings"
-        / f"{args.encoder}-{args.backend}"
-        / huella(args.fragmentos)
-    )
+    hue = huella(args.fragmentos)
+    cache = config.TRABAJO / "embeddings" / f"{args.encoder}-{args.backend}" / hue
+    total_bloques = numero_de_bloques(len(fragmentos))
+    print(f"huella:     {hue}  (tiene que coincidir en todas las máquinas)")
     print(f"caché:      {cache}")
+    print(f"bloques:    {total_bloques} de {FRAG_POR_BLOQUE} fragmentos")
+
+    if args.reparto:
+        tramo = tramo_de_bloques(args.reparto, total_bloques)
+        if not tramo:
+            print(f"  el tramo {args.reparto} no cubre ningún bloque de los {total_bloques}")
+            return 1
+        print(f"reparto:    {args.reparto}%  ->  bloques {tramo.start}..{tramo.stop - 1}")
+
+        t0 = time.time()
+        codificar_bloques(encoder, textos, cache, args.lote, tramo)
+        print(f"\ntramo codificado en {(time.time() - t0) / 60:.1f} min")
+        print(f"-> copia los .npy de {cache} a la máquina que arma el índice")
+        return 0
+
+    faltan = bloques_faltantes(cache, total_bloques)
+    print(f"en caché:   {total_bloques - len(faltan)}/{total_bloques} bloques")
+    if faltan:
+        # Al fusionar tramos de varias máquinas, un hueco aquí significa que un
+        # tramo no llegó. Se codifica igual —es lo correcto— pero conviene verlo
+        # antes de que la GPU se pase una hora rellenando lo que ya existía.
+        print(f"  faltan {len(faltan)}: {faltan[:10]}{' ...' if len(faltan) > 10 else ''}")
 
     t0 = time.time()
-    matriz = codificar_por_lotes(encoder, textos, cache, args.lote)
+    matriz = np.vstack(
+        codificar_bloques(encoder, textos, cache, args.lote, range(total_bloques))
+    )
     print(f"codificado en {(time.time() - t0) / 60:.1f} min")
 
     # Verificación: los vectores deben tener norma unitaria para que el producto
