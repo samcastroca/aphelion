@@ -12,6 +12,13 @@ subconjunto sí.
    un documento marcado relevante no está, el F1@3 de esa consulta tiene techo
    artificialmente bajo. Son 265 documentos y no son negociables.
 
+   No negociables de verdad: no basta con avisar. Un aviso en medio de cien
+   líneas de salida pasa inadvertido y el barrido acaba midiendo sobre un
+   subconjunto incompleto, que es el fallo que no se ve. Así que un documento
+   juzgado que no esté en el índice se recupera del texto extraído —que es de
+   donde el barrido re-fragmenta, no del índice— y si no se puede recuperar, no
+   se escribe la submuestra y el guion falla.
+
 2. **Contener los negativos difíciles.** Un subconjunto de material relevante más
    ruido aleatorio es *más fácil* que el corpus real, y una configuración puede
    verse bien ahí solo porque no compite contra nada. Los negativos que importan
@@ -95,6 +102,60 @@ def obligatorios(juicios: dict) -> set[str]:
     return docs
 
 
+def comprobar_cobertura(
+    juicios: dict, elegidos: set[str]
+) -> tuple[int, int, int, int]:
+    """(juicios dentro, juicios totales, docs relevantes dentro, totales).
+
+    Se cuenta sobre los juicios y no sobre los documentos porque es la unidad en
+    la que la métrica miente: un documento juzgado que falte convierte en ceros
+    todos sus juicios, y son ellos los que entran en el NDCG@10.
+    """
+    juzgados = sum(len(j.fragmentos) for j in juicios.values())
+    cubiertos = sum(
+        1
+        for j in juicios.values()
+        for c in j.fragmentos
+        if c.rsplit("-chunk-", 1)[0] in elegidos
+    )
+    relevantes = {d for j in juicios.values() for d in j.documentos}
+    return cubiertos, juzgados, len(relevantes & elegidos), len(relevantes)
+
+
+def desde_texto_crudo(doc_id: str, raiz: Path) -> dict | None:
+    """Metadata de un documento juzgado que no está en el índice.
+
+    Estar fuera del índice no lo deja fuera del alcance: lo que el barrido
+    fragmenta es `trabajo/texto/<doc_id>.json` —`03_fragmentar --docs` filtra esa
+    carpeta por el nombre del archivo—, así que un documento extraído se puede
+    incluir aunque el índice de referencia no lo tenga. Pasa cuando el índice se
+    construyó antes de que el documento se extrajera, o cuando se anotó sobre un
+    índice y se muestrea contra otro.
+
+    Devuelve None si tampoco hay texto extraído: entonces el documento no es
+    alcanzable por ninguna vía y quien llama tiene que parar.
+
+    `fragmentos` queda en 0 porque nadie lo ha fragmentado todavía. Solo se usa
+    para presupuestar el relleno, y contar de menos hace que el subconjunto
+    quede algo más grande que el objetivo, nunca que se caiga un obligatorio.
+    """
+    ruta = raiz / f"{doc_id}.json"
+    if not ruta.exists():
+        return None
+
+    doc = json.loads(ruta.read_text(encoding="utf-8"))
+    fuente = doc.get("fuente", "")
+    return {
+        "fragmentos": 0,
+        # Mismo criterio que `chunking.fragmentar_documento`: el tipo declarado
+        # y, si falta, la extensión del nombre del archivo.
+        "formato": (doc.get("tipo") or fuente.rsplit(".", 1)[-1]).lower(),
+        "fenomeno": doc.get("fenomeno"),
+        "idioma": "",  # lo decide la fragmentación, que aún no ha corrido
+        "fuente": fuente,
+    }
+
+
 def negativos_difciles(ruta: Path, ya: set[str]) -> list[str]:
     """Documentos que los encoders puntúan alto sin haber sido juzgados.
 
@@ -157,15 +218,45 @@ def main() -> int:
 
     juicios = metricas.cargar_juicios(args.ground_truth)
     docs = metadata_por_doc(args.base)
+    indexados = len(docs)
     total_frag = sum(d["fragmentos"] for d in docs.values())
-    print(f"corpus indexado: {len(docs):,} documentos, {total_frag:,} fragmentos")
+    print(f"corpus indexado: {indexados:,} documentos, {total_frag:,} fragmentos")
 
-    # 1. Lo que el ground truth toca. Va entero y sin discusión.
-    nucleo = obligatorios(juicios) & set(docs)
-    perdidos = obligatorios(juicios) - set(docs)
-    if perdidos:
-        print(f"  aviso: {len(perdidos)} doc_id del ground truth no están en el "
-              f"índice: {sorted(perdidos)[:5]}")
+    # 1. Lo que el ground truth toca. Va entero y sin discusión: lo que no esté
+    # en el índice se busca en el texto extraído, que es de donde el barrido
+    # fragmenta, y lo que no aparezca por ninguna de las dos vías detiene la
+    # corrida. Un obligatorio que se cae no da un error, da una métrica más baja
+    # —sus juicios se vuelven ceros— y eso no se distingue de una configuración
+    # peor.
+    nucleo = obligatorios(juicios)
+    recuperados: list[str] = []
+    irrecuperables: list[str] = []
+    for doc_id in sorted(nucleo - set(docs)):
+        registro = desde_texto_crudo(doc_id, config.TEXTO_CRUDO)
+        if registro is None:
+            irrecuperables.append(doc_id)
+        else:
+            docs[doc_id] = registro
+            recuperados.append(doc_id)
+
+    if recuperados:
+        print(f"\n  {len(recuperados)} documentos juzgados no están en el índice y se "
+              f"toman del texto extraído:")
+        print(f"    {', '.join(recuperados[:5])}"
+              f"{' ...' if len(recuperados) > 5 else ''}")
+
+    if irrecuperables:
+        print(f"\nERROR: {len(irrecuperables)} documentos del ground truth no están "
+              f"ni en el índice ni en {config.TEXTO_CRUDO}:")
+        for doc_id in irrecuperables[:10]:
+            print(f"    {doc_id}")
+        if len(irrecuperables) > 10:
+            print(f"    ... y {len(irrecuperables) - 10} más")
+        print("\nSin ellos la submuestra mediría hacia abajo sin decirlo, así que no")
+        print("se escribe. Extrae esos documentos (scripts/etapas/01_extraer.py) o")
+        print("corrige el ground truth, y repite.")
+        return 1
+
     elegidos = set(nucleo)
     resumen("núcleo del ground truth", elegidos, docs)
 
@@ -184,7 +275,12 @@ def main() -> int:
     # no a cuenta libre: son documentos que compiten, y por eso mismo suelen ser
     # largos. Sin este tope 250 de ellos añaden diez mil fragmentos y se comen
     # la ventaja de trabajar con una submuestra.
-    candidatos_duros = negativos_difciles(CACHE_RANKINGS, elegidos)
+    # La caché de rankings puede ser de un índice anterior: un doc_id que ya no
+    # exista pasaría de largo hasta reventar contra `docs[doc]`, y el fallo sería
+    # tumbar la submuestra entera por un negativo prescindible.
+    candidatos_duros = [
+        d for d in negativos_difciles(CACHE_RANKINGS, elegidos) if d in docs
+    ]
     duros: list[str] = []
     for doc in candidatos_duros:
         if len(duros) >= args.negativos or frag >= args.objetivo:
@@ -227,24 +323,22 @@ def main() -> int:
 
     resumen("SUBMUESTRA", elegidos, docs)
     frag = sum(docs[d]["fragmentos"] for d in elegidos)
-    print(f"\n  {len(elegidos) / len(docs):.1%} de los documentos, "
+    print(f"\n  {len(elegidos) / indexados:.1%} de los documentos, "
           f"{frag / total_frag:.1%} de los fragmentos")
     print(f"  la codificación debería tardar ~{total_frag / max(frag, 1):.1f}x menos")
 
-    # Cobertura del ground truth: es el invariante que da sentido al subconjunto.
-    cubiertos = sum(
-        1
-        for j in juicios.values()
-        for c in j.fragmentos
-        if c.rsplit("-chunk-", 1)[0] in elegidos
-    )
-    juzgados = sum(len(j.fragmentos) for j in juicios.values())
-    docs_rel = {d for j in juicios.values() for d in j.documentos}
+    # Cobertura del ground truth: es el invariante que da sentido al subconjunto,
+    # así que se comprueba y decide, no se informa. Tras el paso 1 tiene que salir
+    # total por construcción; que aquí falle significa que algo la deshizo después,
+    # y entonces lo que no puede pasar es que el archivo se escriba igual.
+    cubiertos, juzgados, dentro_rel, total_rel = comprobar_cobertura(juicios, elegidos)
     print(f"\ncobertura del ground truth:")
     print(f"  juicios de fragmento dentro: {cubiertos}/{juzgados}")
-    print(f"  documentos relevantes dentro: {len(docs_rel & elegidos)}/{len(docs_rel)}")
-    if cubiertos < juzgados or len(docs_rel & elegidos) < len(docs_rel):
-        print("  ! la cobertura no es total; revisa los avisos de arriba")
+    print(f"  documentos relevantes dentro: {dentro_rel}/{total_rel}")
+    if cubiertos < juzgados or dentro_rel < total_rel:
+        print("\nERROR: la submuestra no cubre el ground truth entero. No se escribe:")
+        print("  medir sobre ella daría números más bajos sin que nada lo indique.")
+        return 1
 
     args.salida.parent.mkdir(parents=True, exist_ok=True)
     args.salida.write_text(

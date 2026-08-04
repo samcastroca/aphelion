@@ -36,6 +36,10 @@
 
     Exige tener anotado el ground truth y el índice de referencia construido.
 
+    Que el ground truth entre entero no es una preferencia: si un documento
+    juzgado no fuera alcanzable, el guion falla y no escribe la submuestra, en
+    vez de dejar que el barrido mida más bajo sin que nada lo indique.
+
 .PARAMETER Barrido
     Corre un experimento sobre la submuestra con las opciones que se le pidan y
     guarda sus métricas en pruebas\<nombre>\. No prueba todas las combinaciones:

@@ -492,7 +492,10 @@ con tres capas, en este orden de prioridad:
 
 1. **Todo lo que el ground truth toca** —265 documentos, 24.113 fragmentos— y va
    entero. Si un documento juzgado faltara, sus juicios se volverían ceros y la
-   métrica mentiría hacia abajo.
+   métrica mentiría hacia abajo, que es indistinguible de una configuración peor.
+   Por eso no se avisa, se impone: un documento juzgado que no esté en el índice
+   se toma del texto extraído —que es de donde el barrido fragmenta—, y si no
+   aparece por ninguna de las dos vías el guion falla sin escribir nada.
 2. **Los negativos difíciles**: documentos que los encoders puntúan alto sin ser
    relevantes, tomados de los rankings profundos cacheados. Un subconjunto de
    material relevante más ruido aleatorio es *más fácil* que el corpus real.

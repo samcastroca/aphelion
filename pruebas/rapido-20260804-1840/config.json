@@ -1,0 +1,46 @@
+{
+  "nombre": "rapido-20260804-1840",
+  "preset": "rapido",
+  "recetas": [],
+  "fecha": "2026-08-04T18:40:37",
+  "corridas": 1,
+  "opciones": {
+    "encoders": [
+      "me5-small"
+    ],
+    "chunks": [
+      504
+    ],
+    "solapes": [
+      0.15
+    ],
+    "fusiones": [
+      "rrf"
+    ],
+    "k0": [
+      60
+    ],
+    "boosts": [
+      1.0
+    ],
+    "max_por_doc": [
+      3
+    ],
+    "candidatos": [
+      200
+    ],
+    "umbrales": [
+      null
+    ],
+    "agregaciones": [
+      "max"
+    ],
+    "subdividir": [
+      false
+    ],
+    "max_fusion": 2
+  },
+  "submuestra": "C:\\Users\\samue\\OneDrive\\Desktop\\aphelion\\data\\submuestra.json",
+  "ground_truth": "C:\\Users\\samue\\OneDrive\\Desktop\\aphelion\\data\\ground_truth.jsonl",
+  "umbral_emparejamiento": 0.55
+}
