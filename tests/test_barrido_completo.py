@@ -13,6 +13,7 @@ fijar antes de decidir con ellas.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -355,3 +356,85 @@ class TestFusionConvexa:
     def test_propaga_el_idioma_como_las_otras_fusiones(self):
         rankings = {"a": [(meta("c1"), 0.9)]}
         assert fusionar_convexa(rankings)[0].idioma == "es"
+
+
+class TestSignificanciaEnElInforme:
+    """La tabla que decide qué se entrega tiene que traer el p-valor pareado.
+
+    Comparar las diferencias de medias contra la anchura de un intervalo
+    bootstrap es una regla de bolsillo que no distingue entre una ventaja
+    pequeña y consistente —treinta y cuatro consultas de cincuenta— y una
+    grande que viene de tres. El test pareado sí, y es la comparación que
+    decide qué se entrega.
+    """
+
+    def corrida(self, mod, receta, por_consulta, ndcg=0.5, f1=0.5):
+        return mod.Corrida(
+            encoders=("bge-m3",), chunk=504, solape=0.15,
+            cfg=dict(fusion="rrf", k0=60, boost=1.0, max_por_doc=3,
+                     candidatos=200, umbral=None, subdividir=False,
+                     agregacion="max"),
+            ndcg=ndcg, f1=f1, ic_ndcg=(0.4, 0.6), ic_f1=(0.4, 0.6),
+            receta=receta, por_consulta=por_consulta,
+        )
+
+    def test_una_ventaja_consistente_sale_con_p_pequeno(self, tmp_path):
+        mod = cargar_barrido()
+        qids = [f"q{i:03d}" for i in range(20)]
+        base = self.corrida(
+            mod, "entrega", {q: {"ndcg@10": 0.4, "f1@3": 0.4} for q in qids},
+            ndcg=0.4, f1=0.4)
+        mejor = self.corrida(
+            mod, "candidata", {q: {"ndcg@10": 0.6, "f1@3": 0.6} for q in qids},
+            ndcg=0.6, f1=0.6)
+
+        mod.informar([base, mejor], top=10, carpeta=tmp_path)
+        resumen = (tmp_path / "resumen.txt").read_text(encoding="utf-8")
+
+        assert "p(NDCG" in resumen
+        fila = [l for l in resumen.splitlines() if l.startswith("candidata")][-1]
+        assert "0.0001" in fila or "0.000" in fila
+
+    def test_una_ventaja_que_viene_de_una_sola_consulta_no_convence(self, tmp_path):
+        mod = cargar_barrido()
+        qids = [f"q{i:03d}" for i in range(20)]
+        base = self.corrida(
+            mod, "entrega", {q: {"ndcg@10": 0.5, "f1@3": 0.5} for q in qids})
+        suerte = {q: {"ndcg@10": 0.5, "f1@3": 0.5} for q in qids}
+        suerte["q000"] = {"ndcg@10": 1.0, "f1@3": 1.0}
+        candidata = self.corrida(mod, "candidata", suerte, ndcg=0.525, f1=0.525)
+
+        mod.informar([base, candidata], top=10, carpeta=tmp_path)
+        resumen = (tmp_path / "resumen.txt").read_text(encoding="utf-8")
+
+        fila = [l for l in resumen.splitlines() if l.startswith("candidata")][-1]
+        p = float(fila.split()[-2])
+        assert p > 0.05, fila
+
+    def test_el_p_valor_llega_al_jsonl(self, tmp_path):
+        mod = cargar_barrido()
+        qids = [f"q{i:03d}" for i in range(10)]
+        base = self.corrida(
+            mod, "entrega", {q: {"ndcg@10": 0.3, "f1@3": 0.3} for q in qids},
+            ndcg=0.3, f1=0.3)
+        otra = self.corrida(
+            mod, "candidata", {q: {"ndcg@10": 0.7, "f1@3": 0.7} for q in qids},
+            ndcg=0.7, f1=0.7)
+
+        mod.informar([base, otra], top=10, carpeta=tmp_path)
+        filas = [json.loads(l) for l in
+                 (tmp_path / "metricas.jsonl").read_text(encoding="utf-8").splitlines()]
+        candidata = next(f for f in filas if f["receta"] == "candidata")
+        assert candidata["p_ndcg@10"] < 0.05
+        assert candidata["p_f1@3"] < 0.05
+
+    def test_sin_receta_entrega_no_hay_con_que_comparar(self, tmp_path):
+        """Una rejilla a mano no tiene línea base; el informe no debe inventarla."""
+        mod = cargar_barrido()
+        qids = [f"q{i:03d}" for i in range(10)]
+        a = self.corrida(mod, None, {q: {"ndcg@10": 0.3, "f1@3": 0.3} for q in qids})
+        b = self.corrida(mod, None, {q: {"ndcg@10": 0.7, "f1@3": 0.7} for q in qids})
+
+        mod.informar([a, b], top=10, carpeta=tmp_path)
+        resumen = (tmp_path / "resumen.txt").read_text(encoding="utf-8")
+        assert "p(NDCG" not in resumen

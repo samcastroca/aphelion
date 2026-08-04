@@ -190,6 +190,60 @@ def intervalo_bootstrap(
     return (bajo, alto)
 
 
+def p_valor_permutacion(
+    a: list[float],
+    b: list[float],
+    n: int = 100_000,
+    semilla: int = 20260801,
+) -> tuple[float, float]:
+    """Compara dos configuraciones consulta a consulta. Devuelve (diferencia, p).
+
+    `a` y `b` son la misma métrica de las mismas consultas y **en el mismo
+    orden**, medida con dos configuraciones. Eso es lo que permite parear: la
+    dificultad de cada consulta afecta a las dos por igual y se cancela al
+    restar, mientras que comparar dos `intervalo_bootstrap` independientes la
+    cuenta como varianza en ambas y esconde diferencias que sí son reales.
+
+    Bajo la hipótesis nula las dos configuraciones son intercambiables en cada
+    consulta, así que cambiarle el signo a una diferencia es una reasignación
+    válida. El p-valor es la fracción de reasignaciones que dan una diferencia
+    media al menos tan extrema como la observada; con la corrección de
+    continuidad nunca sale exactamente cero, que es una certeza que un test de
+    remuestreo no puede dar.
+
+    Se prefiere a la prueba de hipótesis por bootstrap porque esta última tiene
+    sesgo documentado hacia p-valores pequeños con pocas consultas, y aquí son
+    cincuenta. `intervalo_bootstrap` sigue siendo lo correcto para poner un
+    intervalo alrededor de **una** medida; lo que no hace bien es comparar dos.
+
+    Ojo con la multiplicidad: nueve recetas son treinta y seis comparaciones por
+    métrica, y a 0.05 se espera casi una falsa alarma por métrica. Si se van a
+    mirar todas, hay que corregir el umbral.
+    """
+    if len(a) != len(b):
+        raise ValueError(
+            f"se comparan {len(a)} consultas contra {len(b)}: el test es pareado "
+            "y exige las mismas consultas en el mismo orden"
+        )
+    if not a:
+        raise ValueError("sin consultas no hay nada que comparar")
+
+    difs = [x - y for x, y in zip(a, b)]
+    observada = sum(difs) / len(difs)
+
+    rng = random.Random(semilla)
+    extremas = 0
+    for _ in range(n):
+        suma = sum(d if rng.random() < 0.5 else -d for d in difs)
+        # El margen absorbe el error de coma flotante: sin él, la reasignación
+        # que reproduce la diferencia original puede quedar fuera por 1e-17 y el
+        # p-valor de dos medidas idénticas no llega a 1.
+        if abs(suma / len(difs)) >= abs(observada) - 1e-12:
+            extremas += 1
+
+    return observada, (extremas + 1) / (n + 1)
+
+
 def cargar_juicios(ruta: Path) -> dict[str, Juicio]:
     juicios: dict[str, Juicio] = {}
     with ruta.open(encoding="utf-8") as fh:

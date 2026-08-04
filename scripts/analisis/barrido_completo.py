@@ -72,7 +72,7 @@ import json
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -313,6 +313,9 @@ class Corrida:
     ic_ndcg: tuple[float, float]
     ic_f1: tuple[float, float]
     receta: str | None = None
+    # query_id -> {'ndcg@10', 'f1@3'}. Hace falta para comparar dos corridas
+    # consulta a consulta; las medias solas no permiten parear.
+    por_consulta: dict[str, dict] = field(default_factory=dict)
 
     @property
     def etiqueta(self) -> str:
@@ -326,15 +329,38 @@ class Corrida:
             f"s={'sí' if c['subdividir'] else 'no'} a={c['agregacion']:<5}"
         )
 
-    def to_dict(self, borda: int) -> dict:
+    def to_dict(self, borda: int, p: dict[str, float] | None = None) -> dict:
+        # `por_consulta` se queda fuera a propósito: son cincuenta entradas por
+        # corrida y lo que se compara entre experimentos son los agregados.
         return {
             "receta": self.receta,
             "encoders": list(self.encoders), "chunk": self.chunk,
             "solape": self.solape, **self.cfg,
             "ndcg@10": self.ndcg, "f1@3": self.f1,
             "ic_ndcg@10": list(self.ic_ndcg), "ic_f1@3": list(self.ic_f1),
+            **(p or {}),
             "borda": borda,
         }
+
+
+def comparar_con_la_base(corrida: Corrida, base: Corrida) -> dict[str, float]:
+    """p-valores pareados de una corrida frente a la línea base.
+
+    Devuelve `{}` si a alguna de las dos le faltan las métricas por consulta,
+    que es lo que pasa al releer un experimento antiguo: sin ellas no se puede
+    parear, y un p-valor calculado sobre otra cosa sería peor que ninguno.
+    """
+    comunes = sorted(set(corrida.por_consulta) & set(base.por_consulta))
+    if not comunes:
+        return {}
+    salida: dict[str, float] = {}
+    for metrica in ("ndcg@10", "f1@3"):
+        _, p = metricas.p_valor_permutacion(
+            [corrida.por_consulta[q][metrica] for q in comunes],
+            [base.por_consulta[q][metrica] for q in comunes],
+        )
+        salida[f"p_{metrica}"] = round(p, 4)
+    return salida
 
 
 # --- Fase cara ------------------------------------------------------------
@@ -519,7 +545,7 @@ def evaluar_chunking(
             encoders=plan.encoders, chunk=chunk, solape=solape, cfg=cfg,
             ndcg=resumen["ndcg@10"], f1=resumen["f1@3"],
             ic_ndcg=resumen["ic_ndcg@10"], ic_f1=resumen["ic_f1@3"],
-            receta=plan.receta,
+            receta=plan.receta, por_consulta=resumen["por_consulta"],
         ))
     return corridas
 
@@ -573,25 +599,34 @@ def informar(corridas: list[Corrida], top: int, carpeta: Path) -> None:
     # Frente a la entrega, que es la comparación que decide algo: una receta que
     # gane a las otras recetas pero no a lo que ya está construido no se entrega.
     base = next((c for c in corridas if c.receta == "entrega"), None)
+    p_de: dict[int, dict[str, float]] = {}
     if base is not None and len(corridas) > 1:
         di("")
         # Sin letras griegas: la consola de Windows en español es cp1252 y una
         # delta la mata con UnicodeEncodeError después de haber medido todo.
-        di(f"{'receta':<13} {'dif.NDCG@10':>12} {'dif.F1@3':>10}   frente a la entrega")
+        di(f"{'receta':<13} {'dif.NDCG@10':>12} {'dif.F1@3':>10}   "
+           f"{'veredicto':<9} {'p(NDCG)':>8} {'p(F1)':>7}")
         for i in orden:
             c = corridas[i]
             if c is base:
                 continue
             dn, df = c.ndcg - base.ndcg, c.f1 - base.f1
-            # El intervalo de la entrega da la escala: una diferencia más pequeña
-            # que su mitad no distingue las configuraciones, las empata.
-            ruido = (base.ic_ndcg[1] - base.ic_ndcg[0]) / 2
             veredicto = "gana" if min(dn, df) > 0 else "pierde" if max(dn, df) < 0 else "mixto"
-            if max(abs(dn), abs(df)) < ruido / 2:
-                veredicto = "empata"
-            di(f"{(c.receta or ''):<13} {dn:>+12.4f} {df:>+10.4f}   {veredicto}")
-        di(f"  el intervalo de la entrega mide {ruido * 2:.3f} de ancho en NDCG@10:")
-        di("  por debajo de la mitad de eso, las diferencias no son distinguibles")
+            p_de[i] = comparar_con_la_base(c, base)
+            pn = p_de[i].get("p_ndcg@10")
+            pf = p_de[i].get("p_f1@3")
+            cols = (f"{pn:>8.4f} {pf:>7.4f}" if pn is not None else f"{'-':>8} {'-':>7}")
+            di(f"{(c.receta or ''):<13} {dn:>+12.4f} {df:>+10.4f}   "
+               f"{veredicto:<9} {cols}")
+        # El p-valor es pareado —mismas consultas en las dos corridas— y por eso
+        # distingue una ventaja pequeña y constante de una grande que viene de
+        # dos consultas. Es la comparación que decide, no la diferencia de medias.
+        di("  p pareado por permutación frente a la entrega; por debajo de 0.05")
+        di("  la diferencia no se explica por el reparto de consultas.")
+        if len(corridas) > 3:
+            umbral = 0.05 / (2 * (len(corridas) - 1))
+            di(f"  Son {2 * (len(corridas) - 1)} comparaciones: para leerlas todas a la vez")
+            di(f"  el umbral corregido es {umbral:.4f}, no 0.05.")
 
     if mejor_n is not mejor_f:
         di("")
@@ -608,7 +643,8 @@ def informar(corridas: list[Corrida], top: int, carpeta: Path) -> None:
     carpeta.mkdir(parents=True, exist_ok=True)
     with (carpeta / "metricas.jsonl").open("w", encoding="utf-8") as fh:
         for i in orden:
-            fh.write(json.dumps(corridas[i].to_dict(puntos[i]), ensure_ascii=False) + "\n")
+            fh.write(json.dumps(
+                corridas[i].to_dict(puntos[i], p_de.get(i)), ensure_ascii=False) + "\n")
     (carpeta / "resumen.txt").write_text("\n".join(lineas) + "\n", encoding="utf-8")
     di("")
     di(f"{len(corridas)} corridas -> {carpeta}")
