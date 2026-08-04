@@ -15,17 +15,19 @@ mejor NDCG@10: 0.4879  IC [0.429, 0.549]
 mejor F1@3:    0.6693  IC [0.593, 0.749]
   convexa       bge-m3+me5-large             504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top2 
 
-receta         dif.NDCG@10   dif.F1@3   frente a la entrega
-convexa            +0.0335    +0.0813   gana
-bge-top2           +0.0720    +0.0053   gana
-filtrado           +0.0070    +0.0680   gana
-familias           +0.0301    -0.0200   mixto
-sin-recorte        -0.0246    -0.0947   pierde
-granular           -0.0103    -0.1080   pierde
-contexto           -0.0390    -0.0813   pierde
-barato             -0.1656    -0.1880   pierde
-  el intervalo de la entrega mide 0.107 de ancho en NDCG@10:
-  por debajo de la mitad de eso, las diferencias no son distinguibles
+receta         dif.NDCG@10   dif.F1@3   veredicto  p(NDCG)   p(F1)
+convexa            +0.0335    +0.0813   gana        0.0106  0.0288
+bge-top2           +0.0720    +0.0053   gana        0.0019  0.8968
+filtrado           +0.0070    +0.0680   gana        0.2363  0.0368
+familias           +0.0301    -0.0200   mixto       0.2186  0.7633
+sin-recorte        -0.0246    -0.0947   pierde      0.3314  0.0591
+granular           -0.0103    -0.1080   pierde      0.7211  0.0324
+contexto           -0.0390    -0.0813   pierde      0.1598  0.1099
+barato             -0.1656    -0.1880   pierde      0.0000  0.0003
+  p pareado por permutación frente a la entrega; por debajo de 0.05
+  la diferencia no se explica por el reparto de consultas.
+  Son 16 comparaciones: para leerlas todas a la vez
+  el umbral corregido es 0.0031, no 0.05.
 
   Las dos métricas premian configuraciones distintas. El reto las pondera
   por igual (Borda), pero nada obliga a usar la misma política para las dos

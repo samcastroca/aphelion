@@ -1,0 +1,49 @@
+{
+  "nombre": "tres-encoders",
+  "preset": null,
+  "recetas": [],
+  "fecha": "2026-08-04T12:35:11",
+  "corridas": 14,
+  "opciones": {
+    "encoders": [
+      "bge-m3",
+      "me5-large",
+      "gte-multilingual-base"
+    ],
+    "chunks": [
+      504
+    ],
+    "solapes": [
+      0.15
+    ],
+    "fusiones": [
+      "rrf",
+      "convexa"
+    ],
+    "k0": [
+      60
+    ],
+    "boosts": [
+      1.05
+    ],
+    "max_por_doc": [
+      3
+    ],
+    "candidatos": [
+      200
+    ],
+    "umbrales": [
+      null
+    ],
+    "agregaciones": [
+      "top2"
+    ],
+    "subdividir": [
+      false
+    ],
+    "max_fusion": 3
+  },
+  "submuestra": "C:\\Users\\STEM\\Desktop\\Code\\aphelion\\data\\submuestra.json",
+  "ground_truth": "C:\\Users\\STEM\\Desktop\\Code\\aphelion\\data\\ground_truth.jsonl",
+  "umbral_emparejamiento": 0.55
+}
