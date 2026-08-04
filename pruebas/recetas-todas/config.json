@@ -1,0 +1,179 @@
+{
+  "nombre": "recetas-todas",
+  "preset": null,
+  "recetas": [
+    "entrega",
+    "bge-top2",
+    "convexa",
+    "familias",
+    "filtrado",
+    "barato",
+    "sin-recorte",
+    "granular",
+    "contexto"
+  ],
+  "fecha": "2026-08-04T11:01:51",
+  "corridas": 9,
+  "opciones": {
+    "entrega": {
+      "apuesta": "la línea base: exactamente lo que se entrega hoy",
+      "por_que": "No es una candidata, es la vara de medir. Sin ella una tabla de recetas dice cuál es la mejor entre las nuevas, que es la pregunta equivocada: lo que hay que saber es si alguna le gana a lo que ya está construido.",
+      "encoders": [
+        "bge-m3",
+        "me5-large"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "max"
+    },
+    "bge-top2": {
+      "apuesta": "un solo encoder, agregando por los dos mejores fragmentos",
+      "por_que": "Es el indicio más fuerte que hay medido. BGE-M3 solo ya ganaba en fragmentos, y cambiando la agregación de max a top2 subió el F1@3 de 0,6947 a 0,7067 sin mover el NDCG@10, quedándose a 0,014 del 0,721 que da la fusión. Si se confirma, una agregación mejor recupera casi todo lo que aportaba el segundo encoder y este deja de justificar su coste: la mitad de tiempo de codificación y la mitad del índice.",
+      "encoders": [
+        "bge-m3"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top2"
+    },
+    "convexa": {
+      "apuesta": "fusionar por similitud normalizada en vez de por posición",
+      "por_que": "RRF tira la magnitud: un candidato que gana por 0,30 de coseno y otro que gana por 0,01 aportan lo mismo. La combinación convexa de puntuaciones normalizadas por min-max conserva esa distancia (Bruch et al. 2022) y es la alternativa que el diseño dejó abierta sin medir. Con top2 para no cambiar dos cosas a la vez respecto a `bge-top2`, que es la receta con la que compite.",
+      "encoders": [
+        "bge-m3",
+        "me5-large"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "convexa",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top2"
+    },
+    "familias": {
+      "apuesta": "fusionar dos familias distintas en vez de dos parientes",
+      "por_que": "BGE-M3 y mE5 salen los dos de XLM-RoBERTa, así que se equivocan en cosas parecidas y fusionarlos aporta menos consenso del que aparenta. GTE-multilingual-base viene de otro preentrenamiento: si la fusión vale por decorrelación de errores, este par debería ganarle al par de la entrega. Si no le gana, la fusión estaba aportando poco y `bge-top2` se refuerza.",
+      "encoders": [
+        "bge-m3",
+        "gte-multilingual-base"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top2"
+    },
+    "filtrado": {
+      "apuesta": "descartar la cola floja de cada índice antes de fusionar",
+      "por_que": "El post-filtro de la §8.7 quita de cada índice los candidatos por debajo del 90% de la mejor similitud de esa consulta. Está implementado y desactivado porque el valor tenía que salir del barrido y no de una corazonada. Debería ayudar al F1@3, donde un documento sostenido por un solo fragmento mediocre gasta una de las tres posiciones; puede hacer daño al NDCG@10 si deja el top-10 incompleto, y por eso hay que medirlo y no suponerlo.",
+      "encoders": [
+        "bge-m3",
+        "me5-large"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": 0.9,
+      "subdividir": false,
+      "agregacion": "top2"
+    },
+    "barato": {
+      "apuesta": "¿hace falta un modelo grande?",
+      "por_que": "mE5-base son 768 dimensiones contra 1024 y codifica varias veces más rápido: en la GPU de 4 GB donde BGE-M3 va a 2,6 fragmentos por segundo, eso es la diferencia entre una tarde y una noche. Si la brecha de métricas es menor que los intervalos de confianza, el modelo grande no se está pagando. Es la receta que puede cambiar cómo se trabaja, no solo qué se entrega.",
+      "encoders": [
+        "me5-base"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top2"
+    },
+    "sin-recorte": {
+      "apuesta": "fragmentos que quepan enteros en las 250 palabras del reto",
+      "por_que": "El presupuesto de 504 tokens no mira el límite de palabras: medido sobre la submuestra, el 79,9% de los fragmentos lo excede (93,2% de los que están en español) y se entregan truncados, perdiendo ~20% de la cola. La recuperación no sufre —el vector se calculó sobre el fragmento entero— pero el jurado empareja sobre el texto entregado (§10.2.1), así que la frase que justificó el acierto puede haberse quedado fuera. A 345 tokens el 90% cabe sin recortar. Lo que se arriesga a cambio es contexto por vector, y eso es lo que mide.",
+      "encoders": [
+        "bge-m3"
+      ],
+      "chunk": 345,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top2"
+    },
+    "granular": {
+      "apuesta": "fragmentos cortos y sin solape, apostando al NDCG@10",
+      "por_que": "El NDCG@10 premia precisión en diez posiciones: un fragmento de 256 tokens (~160 palabras) es más específico y no se recorta nunca. Sube el tope por documento a 5 porque al partir más fino la evidencia de un mismo informe se reparte entre más fragmentos y el tope de 3 empezaría a descartar aciertos. Sin solape porque cuesta un 15% de vectores y no hay evidencia de que aporte.",
+      "encoders": [
+        "bge-m3"
+      ],
+      "chunk": 256,
+      "solape": 0.0,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 5,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "max"
+    },
+    "contexto": {
+      "apuesta": "fragmentos largos y top3, apostando al F1@3",
+      "por_que": "La apuesta contraria a `granular`, y sobre la otra métrica: para acertar el documento conviene que cada vector resuma más del documento. Solo BGE-M3, porque 768 tokens no caben en la ventana de 512 de mE5 y ahí se truncarían sin avisar. top3 y tope 5 por la misma razón: con fragmentos largos, tres buenos del mismo documento son mejor señal de que el documento es el correcto que uno solo.",
+      "encoders": [
+        "bge-m3"
+      ],
+      "chunk": 768,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 5,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top3"
+    }
+  },
+  "submuestra": "C:\\Users\\STEM\\Desktop\\Code\\aphelion\\data\\submuestra.json",
+  "ground_truth": "C:\\Users\\STEM\\Desktop\\Code\\aphelion\\data\\ground_truth.jsonl",
+  "umbral_emparejamiento": 0.55
+}
