@@ -54,10 +54,10 @@ src/aphelion/
     vectores.py        índice FAISS: construcción, persistencia, búsqueda
   busqueda/
     consultas.py       lectura de las 50 consultas
-    recuperacion.py    RRF, boost por fenómeno, diversificación, max pooling
+    recuperacion.py    RRF, boost por fenómeno, diversificación, top2 pooling
     salida.py          resultados.jsonl y validación del esquema
   evaluacion/
-    metricas.py        NDCG@10 y F1@3
+    metricas.py        NDCG@10, F1@3 y el test pareado que las compara
 ```
 
 ### Los scripts
@@ -84,6 +84,8 @@ scripts/
     submuestra.py        elige el subconjunto con el que iterar rápido
     barrido.py           políticas de recuperación sobre el índice de la entrega
     barrido_completo.py  corre recetas, presets o una rejilla a medida
+    techo.py             ¿la culpa es de no encontrar o de no ordenar?
+    validar_corpus.py    repite la comparación sobre el corpus, no la submuestra
 ```
 
 El catálogo de recetas —las configuraciones completas que compiten por entrarse a
@@ -425,14 +427,14 @@ hoy.
 
 ```powershell
 uv run python -m aphelion.evaluacion.recetas       # el catálogo con sus parámetros
-.\ejecutar.ps1 -Recetas entrega,bge-top2           # la comparación que decide
+.\ejecutar.ps1 -Recetas entrega,dos-encoders       # la comparación que decide
 .\ejecutar.ps1 -Recetas todas
 ```
 
 | receta | encoders | tokens/solape | fusión | agregación | apuesta |
 |---|---|---|---|---|---|
-| `entrega` | bge-m3 + me5-large | 504 / 0,15 | RRF | max | la línea base |
-| `bge-top2` | bge-m3 | 504 / 0,15 | — | top2 | el segundo encoder no se paga |
+| `entrega` | bge-m3 | 504 / 0,15 | — | top2 | la línea base |
+| `dos-encoders` | bge-m3 + me5-large | 504 / 0,15 | RRF | max | lo que se entregaba antes |
 | `convexa` | bge-m3 + me5-large | 504 / 0,15 | convexa | top2 | la magnitud que RRF tira sí importa |
 | `familias` | bge-m3 + gte-base | 504 / 0,15 | RRF | top2 | fusionar parientes aporta poco |
 | `filtrado` | bge-m3 + me5-large | 504 / 0,15 | RRF, umbral 0,9 | top2 | la cola floja gasta posiciones |
@@ -534,14 +536,14 @@ re-fragmentar, y sobre la fragmentación original reproduce el emparejamiento po
 intervalo de confianza.
 
 **Los encoders del catálogo.** `config.ENCODERS` tiene siete; `ENCODERS_ENTREGA`
-son los dos que se indexan para entregar. Los otros cinco existen para el
-barrido, todos arquitecturas encoder con licencia permisiva, como exigen la §4.2
-y la §4.3:
+es el que se indexa para entregar —desde que el corpus completo dijo que el
+segundo no se pagaba, es solo BGE-M3—. Los otros existen para el barrido, todos
+arquitecturas encoder con licencia permisiva, como exigen la §4.2 y la §4.3:
 
 | clave | modelo | dim | por qué está |
 |---|---|---:|---|
 | `bge-m3` | BAAI/bge-m3 | 1024 | el principal actual |
-| `me5-large` | intfloat/multilingual-e5-large | 1024 | el complementario actual |
+| `me5-large` | intfloat/multilingual-e5-large | 1024 | el complementario hasta que se midió que no aportaba |
 | `me5-base` | intfloat/multilingual-e5-base | 768 | barato: barre chunking en minutos |
 | `me5-small` | intfloat/multilingual-e5-small | 384 | el más barato del catálogo |
 | `me5-large-instruct` | intfloat/multilingual-e5-large-instruct | 1024 | asimetría instruida, para el caso es→en |

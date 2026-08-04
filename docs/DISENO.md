@@ -198,16 +198,25 @@ pasa a minúsculas, no se quitan tildes y no se toca ninguna palabra del cuerpo.
 | Modelo | Licencia | Arquitectura | Dim. | Contexto | Rol |
 |---|---|---|---|---|---|
 | `BAAI/bge-m3` | MIT | XLM-RoBERTa (encoder) | 1024 | 8192 | Principal |
-| `intfloat/multilingual-e5-large` | MIT | XLM-RoBERTa (encoder) | 1024 | 512 | Complementario |
+| `intfloat/multilingual-e5-large` | MIT | XLM-RoBERTa (encoder) | 1024 | 512 | Complementario — retirado tras medirlo |
 
 **Justificación de BGE-M3 como principal:** supera a mE5-large en recuperación en
 español (0.727 frente a 0.660 en MIRACL-VISION), su ventana de 8192 tokens elimina
 restricciones sobre el chunking, y produce representaciones densas y sparse en una única
 pasada, aportando sensibilidad léxica sin índice adicional.
 
-**Justificación del segundo encoder:** mE5-large mantiene un espacio vectorial más
-particionado por idioma, lo que reduce el sesgo de recuperar documentos en un idioma
-distinto al de la consulta. Complementa la debilidad conocida de BGE-M3 en esa dimensión.
+**El segundo encoder se retiró tras medirlo.** El argumento era que mE5-large
+mantiene un espacio vectorial más particionado por idioma y compensa la debilidad
+conocida de BGE-M3 ahí. Sobre el corpus completo y el entregable real no se
+sostiene: BGE-M3 solo, con agregación top2, gana +0,1074 de NDCG@10 frente a la
+fusión de los dos con max pooling (p = 0,0002, permutación pareada sobre las 50
+consultas) y cede 0,0213 de F1@3, que no se distingue del ruido (p = 0,51).
+
+La receta `familias` descarta además la explicación alternativa: si la fusión
+valiera por decorrelación de errores, sustituir mE5 por GTE —otra familia de
+preentrenamiento— debería mejorarla, y no lo hace. La fusión aportaba poco, y una
+agregación mejor recupera lo que aportaba a la mitad de coste: un índice en vez de
+dos y la mitad del tiempo de codificación.
 
 **Modelos descartados y por qué:**
 
@@ -251,11 +260,15 @@ Flujo por consulta:
    partida, ajustado empíricamente.
 4. **Diversificación**: tope de fragmentos por documento en el top-10, para evitar que
    un único documento erróneo consuma las diez posiciones evaluadas.
-5. **Agregación a documento por max pooling, con la `fuente` como clave**: la
-   puntuación de un documento es la de su mejor fragmento. Se descarta sum pooling
-   por su sesgo de longitud — un documento con 40 fragmentos débiles (0.15) acumula
-   6.0 y desplaza a un informe preciso con un fragmento de 0.85. Dada la
+5. **Agregación a documento por top2, con la `fuente` como clave**: la puntuación
+   de un documento es la media de sus dos mejores fragmentos. Se descarta sum
+   pooling por su sesgo de longitud — un documento con 40 fragmentos débiles (0.15)
+   acumula 6.0 y desplaza a un informe preciso con un fragmento de 0.85. Dada la
    heterogeneidad de tamaños del corpus, este sesgo sería severo.
+
+   Frente a max pooling, top2 premia que la evidencia esté en varios fragmentos
+   buenos sin dejar que cuarenta flojos ganen por acumulación. Medido, recupera el
+   F1@3 del fenómeno 2 —donde max más perdía— de 0,7708 a 0,8750.
 
    La agregación agrupa por `fuente` y no por `doc_id`, porque el jurado empareja
    los documentos por `fuente` (§10.2.1) y el corpus tiene 59 nombres
@@ -391,9 +404,9 @@ fragmentación de la entrega vayan primero:
 | receta | qué cambia | de dónde sale la apuesta |
 |---|---|---|
 | `entrega` | nada; es la vara de medir | sin ella se compara entre candidatas, que es la pregunta equivocada |
-| `bge-top2` | un encoder, agregación top2 | medido: 0,6947 → 0,7067 de F1@3, a 0,014 de lo que da la fusión |
+| `dos-encoders` | la entrega anterior: bge-m3 + mE5, max | retirar un encoder es lo más caro de revertir; se conserva medible |
 | `convexa` | fusión convexa normalizada | RRF tira la magnitud; Bruch et al. 2022 la conserva |
-| `familias` | bge-m3 + gte en vez de + mE5 | los dos de la entrega salen de XLM-R y se equivocan igual |
+| `familias` | bge-m3 + gte en vez de + mE5 | los dos que se fusionaban salen de XLM-R y se equivocan igual |
 | `filtrado` | umbral relativo 0,9 | §8.7, implementado y desactivado esperando este número |
 | `barato` | mE5-base solo | si la brecha cabe en el intervalo, el modelo grande no se paga |
 | `sin-recorte` | 345 tokens | el 79,9% de los fragmentos excede las 250 palabras y se entrega truncado |
@@ -451,9 +464,6 @@ entrega/
     encoder_bge-m3/
       index.faiss
       metadata.jsonl
-    encoder_me5-large/
-      index.faiss
-      metadata.jsonl
     grafo/
       grafo.graphml           si aplica
 ```
@@ -506,11 +516,13 @@ medible** y solo incrementa el coste de indexación. Nuestro 15% cuesta
 aproximadamente un 15% más de vectores y de tiempo de codificación. Debe entrar
 en el barrido como candidato a eliminarse, no darse por bueno.
 
-**Debilitado: la justificación de RRF.** Se argumentó que RRF es inmune a la
-diferencia de escalas entre espacios vectoriales. Ese argumento vale para fusionar
-BM25 con recuperación densa, donde las escalas son incomparables. Aquí fusionamos
-**dos encoders densos**, ambos con similitud coseno en el mismo rango: el problema
-que RRF resuelve apenas existe. Bruch et al. (2022) muestran que la combinación
+**Resuelto: la justificación de RRF ya no aplica a la entrega.** Se argumentó que
+RRF es inmune a la diferencia de escalas entre espacios vectoriales. Ese argumento
+vale para fusionar BM25 con recuperación densa, donde las escalas son
+incomparables; fusionando **dos encoders densos** con coseno en el mismo rango, el
+problema que RRF resuelve apenas existía. La discusión quedó zanjada por la vía
+corta: la entrega usa un solo índice, así que no hay nada que fusionar. Lo que
+sigue vale para el barrido, donde la fusión se compara. Bruch et al. (2022) muestran que la combinación
 convexa de puntuaciones normalizadas **supera a RRF en dominio** cuando hay
 etiquetas de relevancia disponibles. En cuanto exista el ground truth interno,
 CombSUM normalizado debe compararse contra RRF en lugar de asumirlo. El valor

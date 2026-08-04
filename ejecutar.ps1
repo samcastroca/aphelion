@@ -51,7 +51,7 @@
     comparan contra la receta `entrega`, que es lo que está construido hoy.
 
       entrega      la línea base: lo que se entrega hoy
-      bge-top2     un solo encoder, agregando por los dos mejores fragmentos
+      dos-encoders lo que se entregaba antes: bge-m3 + mE5-large por RRF
       convexa      fusionar por similitud normalizada en vez de por posición
       familias     fusionar dos familias distintas en vez de dos parientes
       filtrado     descartar la cola floja de cada índice antes de fusionar
@@ -122,7 +122,7 @@
 
     # Experimentación: primero la submuestra, después los experimentos
     .\ejecutar.ps1 -Submuestra
-    .\ejecutar.ps1 -Barrido -Recetas entrega,bge-top2   # la comparación que decide
+    .\ejecutar.ps1 -Barrido -Recetas entrega,dos-encoders  # la comparación que decide
     .\ejecutar.ps1 -Barrido -Recetas todas
     .\ejecutar.ps1 -Barrido -Preset chunking
     .\ejecutar.ps1 -Barrido -Encoders bge-m3,gte-multilingual-base -Fusiones rrf,convexa
@@ -368,9 +368,9 @@ if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
                             $etiquetas $nombres "1,2" $apuestas
                     } else {
                         Aviso "El catálogo se lee del entorno, que aún no está preparado."
-                        Aviso "Se correrán 'entrega' y 'bge-top2'; para verlo todo:"
+                        Aviso "Se correrán 'entrega' y 'dos-encoders'; para verlo todo:"
                         Aviso "  uv run python -m aphelion.evaluacion.recetas"
-                        $Recetas = @("entrega", "bge-top2")
+                        $Recetas = @("entrega", "dos-encoders")
                     }
 
                     # Windows PowerShell 5.1 no tiene operador ternario.
@@ -388,7 +388,7 @@ if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
                         "me5-small              384d  el más barato del catálogo"
                         "me5-base               768d  barato y más capaz"
                         "bge-m3                1024d  el principal de la entrega"
-                        "me5-large             1024d  el complementario de la entrega"
+                        "me5-large             1024d  el complementario, retirado tras medirlo"
                         "gte-multilingual-base  768d  familia distinta, más consenso nuevo"
                         "me5-large-instruct    1024d  asimetría instruida, para es->en"
                         "labse                  768d  control: el informe lo descarta"
@@ -571,11 +571,11 @@ if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
     # barre, que es el punto— así que preguntar aquí no tendría sentido.
     if (-not $SoloEntorno -and -not $Submuestra -and -not $Barrido) {
         $Encoders = switch (Elegir "Qué encoders indexar" @(
-                "Los dos: bge-m3 y me5-large   (mejor recuperación, el doble de tiempo)"
-                "Solo bge-m3                   (la mitad de tiempo)"
+                "Solo bge-m3                   (lo que se entrega)"
+                "Los dos: bge-m3 y me5-large   (la entrega anterior, el doble de tiempo)"
                 "Solo me5-large"
             )) {
-            2 { @("bge-m3") }
+            1 { @("bge-m3") }
             3 { @("me5-large") }
             default { $null }
         }
