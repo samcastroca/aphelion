@@ -101,6 +101,11 @@ CANDIDATES_PER_INDEX = 200
 RRF_K0 = 60
 MAX_FRAGMENTS_PER_DOC = 3
 PHENOMENON_BOOST = 1.05
+
+# Cómo se colapsan los fragmentos de un documento en una puntuación: `max` toma
+# el mejor, `topN` promedia los N mejores. Se deja en `max`, que es lo que se
+# entrega; `top2` se admite por línea de comandos porque el barrido lo mide.
+DOCUMENT_AGGREGATION = "max"
 MAX_WORDS_PER_FRAGMENT = 250
 
 # Post-filtro de la §8.7: descarta de cada índice los candidatos cuya similitud
@@ -489,16 +494,35 @@ def diversify(
     return selected
 
 
-def aggregate_to_documents(
-    candidates: list[Candidate], top: int = TOP_DOCUMENTS
-) -> list[str]:
-    """Agrega fragmentos a nivel de documento por max pooling.
+def document_score(scores: list[float], mode: str) -> float:
+    """Colapsa las puntuaciones de los fragmentos de un documento en una.
 
-    Cada documento se queda con la puntuación de su mejor fragmento. Descartamos
-    sumar todos los fragmentos recuperados por el sesgo de longitud: un documento
-    con cuarenta fragmentos flojos de 0,15 acumula 6,0 y desplaza a un informe
-    corto que trae la respuesta exacta con 0,85. Con alertas de un párrafo y
-    atlas de cientos de páginas en el mismo corpus, ese sesgo sería grave.
+    - `max`: manda el mejor fragmento. No tiene sesgo de longitud, pero descarta
+      la evidencia repetida.
+    - `topN`: media de los N mejores. Recompensa que la evidencia esté en varios
+      fragmentos buenos sin dejar que cuarenta flojos ganen por acumulación.
+
+    No se admite sumar todos los fragmentos: un documento con cuarenta flojos de
+    0,15 acumula 6,0 y desplaza a un informe corto que trae la respuesta exacta
+    con 0,85. Con alertas de un párrafo y atlas de cientos de páginas en el mismo
+    corpus, ese sesgo sería grave.
+    """
+    if mode == "max":
+        return max(scores)
+    if mode.startswith("top") and mode[3:].isdigit():
+        best = sorted(scores, reverse=True)[: int(mode[3:])]
+        return sum(best) / len(best)
+    raise ValueError(
+        f"agregación desconocida: {mode!r}. Se admiten max, top2, top3, ..."
+    )
+
+
+def aggregate_to_documents(
+    candidates: list[Candidate],
+    top: int = TOP_DOCUMENTS,
+    mode: str = DOCUMENT_AGGREGATION,
+) -> list[str]:
+    """Agrega fragmentos a nivel de documento.
 
     La agregación va por `fuente` y no por `doc_id`: el jurado empareja los
     documentos por `fuente` (§10.2.1), y el corpus tiene 59 nombres repetidos en
@@ -509,20 +533,23 @@ def aggregate_to_documents(
     El número de fragmentos solo desempata, con un peso lo bastante pequeño para
     no alterar el orden principal.
     """
+    scores: dict[str, list[float]] = {}
     best: dict[str, float] = {}
-    count: dict[str, int] = {}
     holder: dict[str, str] = {}  # fuente -> doc_id del mejor fragmento
 
     for candidate in candidates:
         key = candidate.fuente or candidate.doc_id
+        scores.setdefault(key, []).append(candidate.score)
         previous = best.get(key)
         if previous is None or candidate.score > previous:
             best[key] = candidate.score
             holder[key] = candidate.doc_id
-        count[key] = count.get(key, 0) + 1
 
+    aggregated = {key: document_score(v, mode) for key, v in scores.items()}
     ordered = sorted(
-        best.items(), key=lambda kv: (kv[1], count[kv[0]] * 1e-9), reverse=True
+        aggregated.items(),
+        key=lambda kv: (kv[1], len(scores[kv[0]]) * 1e-9),
+        reverse=True,
     )
     return [holder[key] for key, _ in ordered[:top]]
 
@@ -536,6 +563,7 @@ class Retriever:
         max_per_doc: int = MAX_FRAGMENTS_PER_DOC,
         candidates_per_index: int = CANDIDATES_PER_INDEX,
         threshold: float | None = RELATIVE_THRESHOLD,
+        aggregation: str = DOCUMENT_AGGREGATION,
     ):
         if not indices:
             raise ValueError("no hay índices cargados")
@@ -545,6 +573,10 @@ class Retriever:
         self.max_per_doc = max_per_doc
         self.candidates_per_index = candidates_per_index
         self.threshold = threshold
+        # Se valida al construir y no al escribir la salida: un modo mal escrito
+        # debe fallar antes de cargar los modelos, no después de codificar.
+        document_score([0.0], aggregation)
+        self.aggregation = aggregation
         self._encoders: dict[str, QueryEncoder] = {}
 
     def _encoder(self, name: str) -> QueryEncoder:
@@ -575,7 +607,7 @@ class Retriever:
         fragments = diversify(
             drop_duplicates(candidates), TOP_FRAGMENTS * 3, self.max_per_doc
         )
-        documents = aggregate_to_documents(candidates, TOP_DOCUMENTS)
+        documents = aggregate_to_documents(candidates, TOP_DOCUMENTS, self.aggregation)
 
         return documents, fragments
 
@@ -811,6 +843,9 @@ def main() -> int:
     ap.add_argument("--k0", type=int, default=RRF_K0)
     ap.add_argument("--boost", type=float, default=PHENOMENON_BOOST)
     ap.add_argument("--max-per-doc", type=int, default=MAX_FRAGMENTS_PER_DOC)
+    ap.add_argument("--aggregation", default=DOCUMENT_AGGREGATION,
+                    help="max o topN (top2, top3): cómo se puntúa un documento "
+                         "a partir de sus fragmentos")
     args = ap.parse_args()
 
     set_seeds()
@@ -834,7 +869,8 @@ def main() -> int:
         print(f"índice {name}: {len(index):,} fragmentos")
 
     retriever = Retriever(
-        indices, k0=args.k0, boost=args.boost, max_per_doc=args.max_per_doc
+        indices, k0=args.k0, boost=args.boost, max_per_doc=args.max_per_doc,
+        aggregation=args.aggregation
     )
 
     records = []

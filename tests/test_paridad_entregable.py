@@ -162,3 +162,66 @@ class TestParidad:
         objeto = _lado_entregable(gen, 0.9)
         assert len(objeto["documents"]) == 3
         assert len(objeto["fragments"]) == 10
+
+
+class TestAgregacionEnElEntregable:
+    """El generador tenía una sola forma de pasar de fragmentos a documentos.
+
+    `max` era la única implementada, y es la que se entrega. Pero el barrido
+    mide `top2` y `top3` como alternativas, así que sin ellas en el generador
+    una mejora medida en el paquete no se puede entregar: el jurado ejecuta
+    este archivo, no `aphelion`.
+
+    Lo que estos tests fijan es que las dos copias de la política den lo mismo,
+    que es de lo que trata este módulo entero.
+    """
+
+    def candidatos(self, gen):
+        """Un documento con evidencia repartida contra otro con un solo pico.
+
+        Con `max` gana D2 (0.90 contra 0.80); con `top2` gana D1, porque sus dos
+        mejores promedian 0.775 contra los 0.50 de D2. Es el caso que distingue
+        las dos agregaciones, y por eso vale para comprobar que las dos copias
+        coinciden.
+        """
+        return [
+            gen.Candidate(chunk_id="c1", doc_id="D1", text="t1", fuente="D1.pdf",
+                          fenomeno=1, score=0.80, ranks={"e": 1}, idioma="es"),
+            gen.Candidate(chunk_id="c2", doc_id="D1", text="t2", fuente="D1.pdf",
+                          fenomeno=1, score=0.75, ranks={"e": 2}, idioma="es"),
+            gen.Candidate(chunk_id="c3", doc_id="D2", text="t3", fuente="D2.pdf",
+                          fenomeno=1, score=0.90, ranks={"e": 3}, idioma="es"),
+            gen.Candidate(chunk_id="c4", doc_id="D2", text="t4", fuente="D2.pdf",
+                          fenomeno=1, score=0.50, ranks={"e": 4}, idioma="es"),
+        ]
+
+    def test_max_sigue_siendo_el_comportamiento_por_defecto(self):
+        """Cambiar el defecto cambiaría lo que se entrega sin que nadie lo pida."""
+        gen = cargar_generador()
+        assert gen.aggregate_to_documents(self.candidatos(gen))[0] == "D2"
+
+    def test_top2_premia_la_evidencia_repartida(self):
+        gen = cargar_generador()
+        docs = gen.aggregate_to_documents(self.candidatos(gen), mode="top2")
+        assert docs[0] == "D1"
+
+    def test_el_generador_agrega_igual_que_el_paquete(self):
+        from aphelion.busqueda.recuperacion import agregar_a_documentos, Candidato
+
+        gen = cargar_generador()
+        propios = [
+            Candidato(chunk_id=c.chunk_id, doc_id=c.doc_id, texto=c.text,
+                      fuente=c.fuente, fenomeno=c.fenomeno, puntaje=c.score,
+                      posiciones=dict(c.ranks), idioma=c.idioma)
+            for c in self.candidatos(gen)
+        ]
+        for modo in ("max", "top2", "top3"):
+            assert (gen.aggregate_to_documents(self.candidatos(gen), mode=modo)
+                    == agregar_a_documentos(propios, modo=modo)), modo
+
+    def test_un_modo_desconocido_no_pasa_por_max_en_silencio(self):
+        """Un modo mal escrito en la línea de comandos tiene que fallar, no
+        entregar otra cosa sin avisar."""
+        gen = cargar_generador()
+        with pytest.raises(ValueError):
+            gen.aggregate_to_documents(self.candidatos(gen), mode="topdos")
