@@ -1,0 +1,36 @@
+
+     configuración                                                                                               NDCG@10     F1@3   Borda
+   1 bge-m3                       504/0.15 rrf      k0=60  b=1.05  d=3 n=200  u=no   s=no a=top2                  0.4879   0.5933      37
+   2 bge-m3+me5-large             504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.4494   0.6693      37
+   3 bge-m3+me5-large             504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.4494   0.6760      37
+   4 bge-m3                       504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.4873   0.5947      36
+   5 bge-m3                       504/0.15 rrf      k0=60  b=1.05  d=3 n=200  u=no   s=no a=top3                  0.4879   0.5733      35
+   6 bge-m3                       504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.4873   0.5733      32
+   7 bge-m3+me5-large             504/0.15 combsum          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.4346   0.6293      31
+   8 bge-m3                       504/0.15 combsum          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.4702   0.5547      30
+   9 bge-m3+me5-large             504/0.15 rrf      k0=60  b=1.05  d=3 n=200  u=no   s=no a=top2                  0.4159   0.6627      30
+  10 bge-m3+me5-large             504/0.15 combmnz          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.4346   0.6360      30
+  11 bge-m3+me5-large             504/0.15 rrf      k0=60  b=1.05  d=3 n=200  u=no   s=no a=top3                  0.4159   0.6627      28
+  12 bge-m3+me5-large             504/0.15 combsum          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.4346   0.6160      28
+  13 bge-m3                       504/0.15 combmnz          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.4702   0.5547      27
+  14 bge-m3+me5-large             504/0.15 combmnz          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.4346   0.6227      27
+  15 bge-m3                       504/0.15 combsum          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.4702   0.5267      26
+  16 bge-m3                       504/0.15 combmnz          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.4702   0.5267      23
+  17 me5-large                    504/0.15 rrf      k0=60  b=1.05  d=3 n=200  u=no   s=no a=top2                  0.3222   0.5400      16
+  18 me5-large                    504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.3218   0.5267      11
+  19 me5-large                    504/0.15 rrf      k0=60  b=1.05  d=3 n=200  u=no   s=no a=top3                  0.3222   0.5133       8
+  20 me5-large                    504/0.15 combsum          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.3172   0.5200       7
+  21 me5-large                    504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.3218   0.5200       7
+  22 me5-large                    504/0.15 combsum          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.3172   0.5133       4
+  23 me5-large                    504/0.15 combmnz          b=1.05  d=3 n=200  u=no   s=no a=top3                 0.3172   0.5200       4
+  24 me5-large                    504/0.15 combmnz          b=1.05  d=3 n=200  u=no   s=no a=top2                 0.3172   0.5133       1
+
+mejor NDCG@10: 0.4879  IC [0.429, 0.549]
+  bge-m3                       504/0.15 rrf      k0=60  b=1.05  d=3 n=200  u=no   s=no a=top2 
+mejor F1@3:    0.6760  IC [0.596, 0.749]
+  bge-m3+me5-large             504/0.15 convexa          b=1.05  d=3 n=200  u=no   s=no a=top3 
+
+  Las dos métricas premian configuraciones distintas. El reto las pondera
+  por igual (Borda), pero nada obliga a usar la misma política para las dos
+  listas: se puede tomar el top-10 de fragmentos de la primera y el top-3 de
+  documentos de la segunda.
