@@ -18,9 +18,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
+
 from .. import config
 from .consultas import Consulta
 from ..indice.vectores import IndiceVectorial
+
+
+def expandir_rocchio(
+    consulta: np.ndarray,
+    realimentacion: np.ndarray,
+    alfa: float = 1.0,
+    beta: float = config.PRF_BETA,
+) -> np.ndarray:
+    """Mueve el vector de consulta hacia el centroide de sus primeros resultados.
+
+        q' = normalizar(alfa * q + beta * centroide(realimentación))
+
+    La idea es de Rocchio: los primeros resultados comparten el vocabulario del
+    tema aunque la consulta no lo nombre, y su centroide señala esa región del
+    espacio mejor que la consulta sola. Es lo que aquí puede ayudar, porque el
+    material relevante ya entra en el pool y lo que falla es el orden.
+
+    No interviene ningún modelo: es una media de vectores que ya están en el
+    índice, así que cae dentro de lo que la §8.3 permite —vectores y
+    puntuaciones— y fuera de la expansión de consulta que prohíbe, que es la
+    que reformula el texto con un decoder.
+
+    El centroide se **promedia** y no se suma para que `beta` signifique lo
+    mismo tomando cinco vecinos que veinte. Si la combinación se anula —vecinos
+    opuestos a la consulta— se devuelve la consulta original: sin dirección que
+    seguir, expandir no aporta nada.
+    """
+    consulta = np.asarray(consulta, dtype=np.float32)
+    if realimentacion.size == 0 or beta == 0:
+        return consulta
+
+    centroide = np.asarray(realimentacion, dtype=np.float32).mean(axis=0)
+    expandida = alfa * consulta + beta * centroide
+
+    norma = float(np.linalg.norm(expandida))
+    if norma < 1e-9:
+        return consulta
+    return (expandida / norma).astype(np.float32)
 
 
 @dataclass
@@ -359,6 +399,8 @@ class Recuperador:
         max_por_doc: int = config.MAX_FRAGMENTOS_POR_DOC,
         candidatos_por_indice: int = config.CANDIDATOS_POR_INDICE,
         umbral_relativo: float | None = config.UMBRAL_RELATIVO,
+        prf_k: int = config.PRF_K,
+        prf_beta: float = config.PRF_BETA,
     ):
         if not indices:
             raise ValueError("no hay índices cargados")
@@ -368,6 +410,8 @@ class Recuperador:
         self.max_por_doc = max_por_doc
         self.candidatos_por_indice = candidatos_por_indice
         self.umbral_relativo = umbral_relativo
+        self.prf_k = prf_k
+        self.prf_beta = prf_beta
         self._encoders = encoders_cargados or {}
 
     def _encoder(self, nombre: str):
@@ -389,8 +433,21 @@ class Recuperador:
         rankings: dict[str, list[tuple[dict, float]]] = {}
         for nombre, indice in self.indices.items():
             vector = self._encoder(nombre).codificar_consultas([consulta.texto])[0]
+            encontrados = indice.buscar(vector, k)
+
+            # Rocchio: una segunda pasada con la consulta desplazada hacia el
+            # centroide de los primeros resultados. Se hace por índice y no
+            # sobre la lista fusionada porque cada espacio vectorial es suyo:
+            # el centroide de BGE-M3 no significa nada en el de mE5.
+            if self.prf_k and encontrados:
+                realimentacion = indice.vectores(
+                    [pos for pos, _ in encontrados[: self.prf_k]]
+                )
+                vector = expandir_rocchio(vector, realimentacion, beta=self.prf_beta)
+                encontrados = indice.buscar(vector, k)
+
             rankings[nombre] = [
-                (indice.meta(pos), sim) for pos, sim in indice.buscar(vector, k)
+                (indice.meta(pos), sim) for pos, sim in encontrados
             ]
         return rankings
 

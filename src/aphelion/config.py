@@ -269,6 +269,29 @@ BOOST_FENOMENO = 1.05  # multiplicador suave, no filtro duro
 # se decide en el barrido, no a priori.
 UMBRAL_RELATIVO: float | None = None
 
+# Realimentación de pseudo-relevancia (Rocchio). `PRF_K` primeros resultados se
+# promedian y su centroide desplaza el vector de consulta con peso `PRF_BETA`
+# antes de una segunda búsqueda. `PRF_K = 0` lo desactiva.
+#
+# **Medido y descartado**, no pendiente. Se probaron k en {3, 5, 10} y beta en
+# {0,3, 0,5, 0,8} sobre la submuestra, contra el mismo sistema sin expansión y
+# con el test pareado de `metricas.p_valor_permutacion`:
+#
+#   - con BGE-M3 solo, el mejor (k=10, beta=0,3) sube el NDCG@10 de 0,4879 a
+#     0,5034 con p=0,047, que no sobrevive a la corrección por las catorce
+#     comparaciones de la rejilla (0,05/14 = 0,0036). Es el máximo de una
+#     búsqueda de hiperparámetros, no un efecto.
+#   - con la fusión convexa **hace daño** al F1@3 en las ocho configuraciones,
+#     de 0,6693 a entre 0,613 y 0,641, con p=0,026 en la peor.
+#
+# La lectura es que los primeros resultados de este corpus no son lo bastante
+# limpios como para que su centroide oriente la consulta: la deriva de tema pesa
+# más que el vocabulario que aporta. Queda implementado porque el experimento
+# tiene que ser repetible sobre el corpus completo, donde la densidad de
+# relevantes es cinco veces menor y el resultado puede no ser el mismo.
+PRF_K = 0
+PRF_BETA = 0.5
+
 # Correspondencia consulta -> fenómeno, según el orden del archivo de preguntas.
 RANGOS_FENOMENO = {1: (1, 16), 2: (17, 32), 3: (33, 50)}
 

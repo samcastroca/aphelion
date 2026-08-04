@@ -50,6 +50,19 @@ class IndiceVectorial:
     def meta(self, posicion: int) -> dict:
         return self.metadata[posicion]
 
+    def vectores(self, posiciones: list[int]) -> np.ndarray:
+        """Los vectores indexados en esas posiciones, en ese orden.
+
+        La realimentación de pseudo-relevancia necesita los vectores de los
+        primeros resultados, no solo su metadata. `IndexFlatIP` los guarda tal
+        cual, así que reconstruirlos es exacto y no cuesta una búsqueda.
+        """
+        if not posiciones:
+            return np.empty((0, self.faiss_index.d), dtype=np.float32)
+        return np.stack(
+            [self.faiss_index.reconstruct(int(p)) for p in posiciones]
+        ).astype(np.float32)
+
 
 def construir(vectores: np.ndarray, dim: int):
     import faiss
