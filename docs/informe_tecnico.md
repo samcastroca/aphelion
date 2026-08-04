@@ -84,10 +84,13 @@ rompen el contexto, y el F1@3 se mide precisamente sobre documentos.
 ### Ninguna oración cruza la frontera entre fragmentos
 
 Este requisito descarta cortar por conteo de tokens y obliga a ir acumulando
-oraciones completas. Segmentamos con `pysbd`, que trae reglas para los tres
-idiomas del corpus. Los tokens los cuenta el tokenizador del propio encoder y no
-una aproximación por palabras, porque el presupuesto que importa es el del
-modelo.
+oraciones completas. Segmentamos con `pysbd`, que trae reglas propias para
+español e inglés. **No las trae para portugués**, así que esos documentos se
+segmentan con el modelo inglés, que es el más conservador ante abreviaturas
+desconocidas; pedirle a `pysbd` un idioma que no soporta levanta una excepción,
+y el fallo era silencioso hasta que lo detectamos. Los tokens los cuenta el
+tokenizador del propio encoder y no una aproximación por palabras, porque el
+presupuesto que importa es el del modelo.
 
 Verificamos el cumplimiento instrumentando el código y midiendo qué porcentaje de
 fragmentos salió por alguna ruta que no corta en frontera oracional:

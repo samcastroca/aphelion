@@ -21,7 +21,16 @@ from .. import config
 
 # pysbd trae reglas por idioma; para el resto se usa el segmentador inglés, que
 # es el más conservador ante abreviaturas desconocidas.
-_IDIOMAS_PYSBD = {"es", "en", "pt"}
+#
+# **El portugués no está en esta lista y no es un descuido.** pysbd no lo
+# soporta: sus códigos son {el, fa, sk, de, hy, es, zh, ja, ru, da, am, pl, hi,
+# ur, en, my, mr, kk, bg, fr, it, ar, nl}, y pedirle `language="pt"` levanta un
+# ValueError. Como la llamada vive dentro de un `try`, el fallo era invisible:
+# los 7.617 fragmentos en portugués del corpus caían al `except` y se
+# segmentaban como *un párrafo entero = una oración*, de modo que sus cortes no
+# caían en frontera oracional sino en la ventana de tokens de último recurso.
+# Mapearlos a "en" los segmenta de verdad.
+_IDIOMAS_PYSBD = {"es", "en"}
 
 
 @dataclass(frozen=True)

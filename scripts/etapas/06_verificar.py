@@ -43,12 +43,37 @@ def cargar_generador():
 
 
 def salida_del_paquete(base: Path, preguntas: Path) -> list[dict]:
+    """Corre la política del paquete y **libera los modelos antes de volver**.
+
+    Las dos implementaciones cargan su propia copia de cada encoder, así que
+    ejecutarlas seguidas mantiene cuatro modelos de ~2,2 GB residentes a la vez.
+    En una GPU de 4 GB eso muere con un `CUDA out of memory` en la segunda mitad
+    —después de haber codificado las 50 consultas de la primera—, y el fallo no
+    tiene nada que ver con lo que este script comprueba. Se sueltan aquí.
+    """
+    import gc
+
+    from aphelion.indice import encoders
+
     indices = recuperacion.cargar_indices(None, base)
     recuperador = recuperacion.Recuperador(indices)
-    return [
+    registros = [
         salida.resultado_a_dict(recuperador.recuperar(c))
         for c in mod_consultas.cargar(preguntas)
     ]
+
+    recuperador._encoders.clear()
+    encoders.cargar.cache_clear()
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+    return registros
 
 
 def salida_del_entregable(base: Path, preguntas: Path) -> list[dict]:

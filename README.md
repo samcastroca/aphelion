@@ -77,7 +77,10 @@ scripts/
     06_verificar.py      el entregable reproduce lo que produce el paquete
   analisis/
     evaluar.py           NDCG@10 y F1@3 contra el ground truth propio
-    pool_anotacion.py    arma el pool de anotación y lo consolida
+    comparar.py          evalúa y ordena varias corridas a la vez, por Borda
+    comparar_encoders.py un resultados.jsonl por encoder, y el fusionado
+    pool_anotacion.py    arma el pool de anotación repartido entre personas
+    pool_juicios.py      el mismo pool en un solo archivo, para una pasada
     barrido.py           compara configuraciones de recuperación
 ```
 
@@ -343,13 +346,52 @@ reconocidos, solo para los que falten.
 ### Evaluación
 
 El ground truth oficial no es público, así que se anota uno propio sobre las 50
-consultas reales.
+consultas reales. Hay dos caminos, y comparten formato: los juicios acaban en
+`data/anotacion/*.csv` y se consolidan en `data/ground_truth.jsonl`.
+
+**Reparto entre personas**, con solape para medir acuerdo (kappa de Cohen):
 
 ```bash
 uv run python scripts/analisis/pool_anotacion.py --anotadores 4 --top 20
 # ... el equipo rellena la columna 'relevancia' en los CSV ...
-uv run python scripts/analisis/evaluar.py --detalle
+uv run python scripts/analisis/pool_anotacion.py --consolidar
 ```
+
+**Una sola pasada seguida**, que es lo que conviene si anota una persona o un
+asistente. El pool sale de la unión del top-15 de *cada encoder por separado*,
+para no sesgar la medida hacia lo que la configuración actual ya encuentra:
+
+```bash
+uv run python scripts/analisis/comparar_encoders.py      # busca una vez y cachea
+uv run python scripts/analisis/pool_juicios.py --generar
+uv run python scripts/analisis/pool_juicios.py --lote 1  # imprime 5 consultas
+# ... se escriben los juicios en trabajo/juicios/lote_01.jsonl ...
+uv run python scripts/analisis/pool_juicios.py --consolidar
+```
+
+Cada línea de juicio es `{"query_id", "chunk_id", "relevancia"}` con
+relevancia 0 (no), 1 (parcial) o 2 (relevante). El campo opcional `"doc": true`
+marca el documento como relevante aunque su fragmento puntúe bajo: hace falta
+porque el reto usa **dos claves de emparejamiento distintas** (§10.2.1) —los
+fragmentos se juzgan por su texto y los documentos por su fuente—, y un
+fragmento que solo trae el título de un artículo no es evidencia aunque su
+documento sí lo sea.
+
+Que anote un modelo es admisible: el ground truth es un instrumento de medida y
+no entra al índice ni al `resultados.jsonl` que se entrega, así que la §8.3 no
+lo alcanza. Lo que no se puede saltar es el control — unos juicios que nadie
+contrastó miden el criterio de quien anotó. Por eso conviene que una persona
+anote un subconjunto en paralelo y se mire el kappa.
+
+**Comparar corridas.** `comparar_encoders.py` escribe un `resultados_*.jsonl`
+por encoder y otro con la fusión; `comparar.py` los evalúa todos contra el
+ground truth y los ordena por Conteo de Borda, con desglose por fenómeno:
+
+```bash
+uv run python scripts/analisis/comparar.py trabajo/resultados_*.jsonl entrega/resultados.jsonl
+```
+
+Los documentos se emparejan por `fuente` y no por `doc_id`, como hará el jurado.
 
 ## Notas de diseño que conviene no perder
 

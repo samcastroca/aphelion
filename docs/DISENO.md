@@ -137,8 +137,13 @@ texto. `config.RESERVA_TOKENS_ENCODER = 8` descuenta ese sobrecoste del
 presupuesto (`CHUNK_PRESUPUESTO = 504`); la ventana del modelo y del grafo ONNX
 sigue siendo 512.
 
-- La segmentación en oraciones usa `pysbd`, con soporte nativo para español, inglés y
-  portugués.
+- La segmentación en oraciones usa `pysbd`, con reglas propias para español e inglés.
+  **Portugués no está entre los idiomas que soporta** —pedírselo levanta un
+  `ValueError`— así que esos documentos se segmentan con el modelo inglés. El fallo
+  era silencioso: la llamada vive dentro de un `try`, y los 7.617 fragmentos en
+  portugués caían al `except`, que trata el párrafo entero como una sola oración.
+  Sus cortes no caían entonces en frontera oracional sino en la ventana de tokens
+  de último recurso. Corregido en `_IDIOMAS_PYSBD`; **surte efecto al reindexar**.
 - El conteo de tokens usa el tokenizador del propio encoder, no una aproximación por
   palabras.
 - Cuando el límite cae dentro de una oración, el corte retrocede al final de la última
@@ -480,5 +485,8 @@ aparecería como recuperación mediocre. Al generarlo desde
 | Dos `doc_id` con la misma `fuente` en el top-3 cuentan como un solo acierto (59 nombres repetidos) | La agregación a documento agrupa por `fuente` y reporta el `doc_id` del mejor fragmento |
 | El relleno del esquema repetía fragmentos, que no aportan ni a NDCG ni a F1 | Segunda pasada con piezas reales no emitidas; la repetición queda como último recurso |
 | Divergencia entre el paquete y `generador.py` descubierta tras horas de GPU | `tests/test_paridad_entregable.py` compara ambos sobre un índice sintético en cada `pytest`; `06_verificar.py` lo repite sobre el índice real |
+| Un merge deshace en `generador.py` mejoras que sí siguen en `src/` | Las dos comprobaciones de la fila anterior lo detectan; ya ocurrió una vez y así se encontró |
+| `06_verificar.py` mantiene los encoders de las dos implementaciones a la vez y agota una GPU de 4 GB | El lado del paquete libera sus modelos y vacía la caché de CUDA antes de que arranque el del entregable |
+| Idioma no soportado por `pysbd` con fallo silencioso dentro de un `try` | Solo `es` e `en` van a `pysbd`; el resto usa el segmentador inglés, y el mapa es idéntico en el paquete y en el entregable |
 | Indexación sin GPU: 0,27 frag/s en el Ryzen 5 3400G, 65 h por encoder | **Resuelto.** ONNX Runtime sobre DirectML aprovecha la Radeon RX 6650 XT: 5,0 frag/s, unas 3,5 h por encoder |
 | El backend ONNX podría divergir del PyTorch con el que el jurado codifica las consultas | `onnx_dml.verificar()` compara ambos antes de indexar y aborta si el coseno baja de 0,999. Medido: 0,99974 |

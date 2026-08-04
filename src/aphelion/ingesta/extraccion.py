@@ -62,7 +62,15 @@ def _extraer_pdf(ruta: Path) -> Extraccion:
 # --- JSON -----------------------------------------------------------------
 
 # Claves que contienen el cuerpo del texto, por orden de preferencia.
-_CLAVES_CUERPO = ("body_paragraphs", "body_text", "sections", "content", "texto")
+#
+# `abstract` va al final y no entre las de metadata: es lo único sustantivo que
+# traen los 80 artículos de la revista del CEEEP, que no tienen cuerpo. Sin él
+# esos documentos entraban al índice con solo su título —15 a 39 tokens— y
+# perdían 88.975 caracteres de resumen en español sobre seguridad y defensa,
+# justo el material que responde varias consultas de los fenómenos 1 y 3. Un
+# documento con cuerpo propio no se ve afectado: la primera clave que aparece
+# es la que manda.
+_CLAVES_CUERPO = ("body_paragraphs", "body_text", "sections", "content", "texto", "abstract")
 # Claves descriptivas: van a metadata, no al cuerpo.
 _CLAVES_META = ("url", "date", "fecha", "authors", "tags", "topics", "excerpt")
 

@@ -584,10 +584,11 @@ class Retriever:
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[^\s])")
 
-# pysbd trae reglas para estos tres; para el resto se usa el segmentador inglés,
-# el más conservador ante abreviaturas desconocidas. Mismo mapa que usó el
-# fragmentador al construir el índice.
-_PYSBD_LANGUAGES = {"es", "en", "pt"}
+# pysbd trae reglas para estos dos; para el resto —portugués incluido, que pysbd
+# no soporta y rechaza con un ValueError— se usa el segmentador inglés, el más
+# conservador ante abreviaturas desconocidas. Mismo mapa que usó el fragmentador
+# al construir el índice: si divergen, los dos recortan por sitios distintos.
+_PYSBD_LANGUAGES = {"es", "en"}
 
 
 def split_sentences(text: str, language: str = "es") -> list[str]:
