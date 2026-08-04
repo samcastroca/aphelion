@@ -257,9 +257,32 @@ TOP_FRAGMENTOS = 10
 # Ampliarlo no desplaza nada del top-10: con k0=60, un candidato en el puesto 150
 # aporta 1/210 frente a 1/65 de uno en el puesto 5. Y la búsqueda es exhaustiva
 # de todos modos, así que no cuesta tiempo.
+# **Medido.** Barriendo 25/50/100/200 con la fusión convexa, el F1@3 sube de
+# forma monótona —0,533, 0,587, 0,628, 0,676— y bajar a 25 es la única pérdida
+# que se acerca a ser significativa (p=0,004 pareado). Más allá de 200 la curva
+# se aplana: 400, 800, 1600 y 3200 no mejoran nada (el mejor puntual, 400 con
+# F1 0,689, da p=0,68). Así que 200 no es una cifra heredada, es donde satura.
 CANDIDATOS_POR_INDICE = 200
 RRF_K0 = 60
+
+# **Medido y sin efecto sobre el F1@3**, que es exactamente lo que cabía esperar:
+# la diversificación recorta la lista de fragmentos y la agregación a documento
+# trabaja sobre el pool completo, así que d=1 y d=10 dan el mismo 0,676. Sobre el
+# NDCG@10 el efecto es leve y no significativo (0,431 con d=1, 0,455 con d=10).
+# Se deja en 3 porque es lo que protege el top-10 de que un documento lo acapare,
+# que es para lo que existe.
 MAX_FRAGMENTOS_POR_DOC = 3  # diversificación del top-10
+
+# **Medido y sin efecto**: 1,0 / 1,05 / 1,15 / 1,3 / 1,6 quedan todos dentro del
+# ruido (el mejor, 1,3, da p=0,30 en NDCG@10).
+#
+# El desglose explica por qué no puede ayudar mucho: subir el realce a 1,3
+# beneficia al fenómeno 2 (+0,020 NDCG) y perjudica al 1 (-0,011), y el 1 es
+# justo el que peor rinde. Pero esa brecha —NDCG 0,311 en el fenómeno 1 contra
+# 0,575 en el 2— no es del sistema sino del corpus: el fenómeno 1 tiene 6,4
+# documentos relevantes por consulta contra 9,9 del 2, y 15,3 fragmentos con
+# relevancia positiva contra 21,8. Hay menos que encontrar, así que realzar no
+# lo arregla.
 BOOST_FENOMENO = 1.05  # multiplicador suave, no filtro duro
 
 # Post-filtro de la §8.7: descarta de cada índice los candidatos cuya similitud
