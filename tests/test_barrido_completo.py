@@ -193,7 +193,7 @@ class TestRecetas:
         assert r.candidatos == config.CANDIDATOS_POR_INDICE
         assert r.umbral == config.UMBRAL_RELATIVO
         assert r.subdividir == config.SUBDIVIDIR_FRAGMENTOS
-        assert (r.fusion, r.agregacion) == ("rrf", "max")
+        assert (r.fusion, r.agregacion) == ("rrf", config.AGREGACION_DOCUMENTOS)
 
     def test_cada_receta_se_distingue_de_las_demas(self):
         # Dos recetas idénticas gastarían el doble de GPU en la misma medida y
@@ -250,7 +250,10 @@ class TestRecetas:
         # `contexto` pide 768 tokens con BGE-M3 y nada más. Indexar ahí mE5 sería
         # una hora de GPU en un índice truncado que ningún plan va a consultar.
         mod = cargar_barrido()
-        pares = mod.pares_a_indexar(mod.planificar_recetas(["entrega", "contexto"]))
+        # `dos-encoders` y no `entrega`: desde que la entrega es de un solo
+        # encoder haría falta otra receta para que el caso tenga dos que repartir.
+        pares = mod.pares_a_indexar(
+            mod.planificar_recetas(["dos-encoders", "contexto"]))
         assert pares[(768, 0.15)] == ["bge-m3"]
         assert set(pares[(config.CHUNK_PRESUPUESTO, config.CHUNK_SOLAPE)]) == {
             "bge-m3", "me5-large"
@@ -259,8 +262,8 @@ class TestRecetas:
     def test_el_resumen_no_nombra_una_fusion_que_no_interviene(self):
         # Con un solo índice no hay nada que fusionar; poner 'rrf' ahí haría
         # creer que se está midiendo algo que no participa.
-        assert "sin fusión" in mod_recetas.RECETAS["bge-top2"].resumen()
-        assert "rrf" in mod_recetas.RECETAS["entrega"].resumen()
+        assert "sin fusión" in mod_recetas.RECETAS["entrega"].resumen()
+        assert "rrf" in mod_recetas.RECETAS["dos-encoders"].resumen()
 
     def test_el_resumen_enseña_lo_que_se_aparta_de_la_entrega(self):
         assert "umbral=0.9" in mod_recetas.RECETAS["filtrado"].resumen()

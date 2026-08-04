@@ -195,10 +195,17 @@ class TestAgregacionEnElEntregable:
                           fenomeno=1, score=0.50, ranks={"e": 4}, idioma="es"),
         ]
 
-    def test_max_sigue_siendo_el_comportamiento_por_defecto(self):
-        """Cambiar el defecto cambiaría lo que se entrega sin que nadie lo pida."""
+    def test_el_defecto_del_generador_es_el_que_declara_el_paquete(self):
+        """Si las dos copias se desincronizan, el jurado ejecuta una política
+        distinta de la que se midió, y nadie se entera hasta 06_verificar."""
+        from aphelion import config
+
         gen = cargar_generador()
-        assert gen.aggregate_to_documents(self.candidatos(gen))[0] == "D2"
+        assert gen.DOCUMENT_AGGREGATION == config.AGREGACION_DOCUMENTOS
+
+    def test_max_sigue_disponible_aunque_no_sea_el_defecto(self):
+        gen = cargar_generador()
+        assert gen.aggregate_to_documents(self.candidatos(gen), mode="max")[0] == "D2"
 
     def test_top2_premia_la_evidencia_repartida(self):
         gen = cargar_generador()

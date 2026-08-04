@@ -18,7 +18,7 @@ sugiere que se puede mejorar. Lo que ninguna receta hace es cambiar dos cosas a
 la vez sin motivo, porque entonces el resultado no dice cuál de las dos ganó.
 
     uv run python -m aphelion.evaluacion.recetas          # ver el catálogo
-    uv run python scripts/analisis/barrido_completo.py --recetas entrega,bge-top2
+    uv run python scripts/analisis/barrido_completo.py --recetas entrega,dos-encoders
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ _ENTREGA = dict(
     candidatos=config.CANDIDATOS_POR_INDICE,
     umbral=None,
     subdividir=False,
-    agregacion="max",
+    agregacion=config.AGREGACION_DOCUMENTOS,
 )
 
 
@@ -155,22 +155,25 @@ RECETAS: dict[str, Receta] = {
             "No es una candidata, es la vara de medir. Sin ella una tabla de "
             "recetas dice cuál es la mejor entre las nuevas, que es la pregunta "
             "equivocada: lo que hay que saber es si alguna le gana a lo que ya "
-            "está construido."
+            "está construido. "
+            "Desde que se midió sobre el corpus completo, la entrega es BGE-M3 "
+            "solo con agregación top2: le ganaba a los dos encoders con max por "
+            "+0,1074 de NDCG@10 (p=0,0002, pareado sobre el entregable real) sin "
+            "ceder nada medible en F1@3."
+        ),
+        encoders=tuple(config.ENCODERS_ENTREGA),
+    ),
+    "dos-encoders": _variante(
+        apuesta="lo que se entregaba antes: fusionar BGE-M3 con mE5-large por RRF",
+        por_que=(
+            "Era la entrega hasta que el corpus completo dijo otra cosa. Se queda "
+            "en el catálogo porque retirar un encoder es la decisión más cara de "
+            "revertir —hay que recodificar 64.484 fragmentos— y conviene poder "
+            "volver a medirla cuando cambie el ground truth o la fragmentación, "
+            "sin reconstruirla de memoria."
         ),
         encoders=("bge-m3", "me5-large"),
-    ),
-    "bge-top2": _variante(
-        apuesta="un solo encoder, agregando por los dos mejores fragmentos",
-        por_que=(
-            "Es el indicio más fuerte que hay medido. BGE-M3 solo ya ganaba en "
-            "fragmentos, y cambiando la agregación de max a top2 subió el F1@3 de "
-            "0,6947 a 0,7067 sin mover el NDCG@10, quedándose a 0,014 del 0,721 "
-            "que da la fusión. Si se confirma, una agregación mejor recupera casi "
-            "todo lo que aportaba el segundo encoder y este deja de justificar su "
-            "coste: la mitad de tiempo de codificación y la mitad del índice."
-        ),
-        encoders=("bge-m3",),
-        agregacion="top2",
+        agregacion="max",
     ),
     "convexa": _variante(
         apuesta="fusionar por similitud normalizada en vez de por posición",
@@ -180,7 +183,7 @@ RECETAS: dict[str, Receta] = {
             "puntuaciones normalizadas por min-max conserva esa distancia (Bruch "
             "et al. 2022) y es la alternativa que el diseño dejó abierta sin "
             "medir. Con top2 para no cambiar dos cosas a la vez respecto a "
-            "`bge-top2`, que es la receta con la que compite."
+            "`entrega`, que es la receta con la que compite."
         ),
         encoders=("bge-m3", "me5-large"),
         fusion="convexa",
@@ -194,7 +197,7 @@ RECETAS: dict[str, Receta] = {
             "GTE-multilingual-base viene de otro preentrenamiento: si la fusión "
             "vale por decorrelación de errores, este par debería ganarle al par de "
             "la entrega. Si no le gana, la fusión estaba aportando poco y "
-            "`bge-top2` se refuerza."
+            "la entrega de un solo encoder se refuerza."
         ),
         encoders=("bge-m3", "gte-multilingual-base"),
         agregacion="top2",
@@ -285,7 +288,7 @@ RECETAS: dict[str, Receta] = {
 
 
 def seleccionar(texto: str) -> list[str]:
-    """'entrega,bge-top2' o 'todas' -> nombres de receta, en orden de catálogo.
+    """'entrega,convexa' o 'todas' -> nombres de receta, en orden de catálogo.
 
     Respeta el orden del catálogo y no el de escritura: las que comparten la
     fragmentación de la entrega van primero y las que obligan a re-fragmentar al

@@ -19,7 +19,7 @@ codifica nada y termina en minutos.
 
 Uso:
     uv run python scripts/analisis/validar_corpus.py
-    uv run python scripts/analisis/validar_corpus.py --recetas entrega,bge-top2
+    uv run python scripts/analisis/validar_corpus.py --recetas entrega,dos-encoders
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ RAIZ = Path(__file__).resolve().parents[2]
 # Las que compiten por entregarse. Las que cambian la fragmentación quedan fuera:
 # exigirían re-fragmentar y recodificar el corpus entero, que es lo que este
 # guion existe para no hacer.
-COMPARABLES = ("entrega", "bge-top2", "convexa", "filtrado", "familias")
+COMPARABLES = ("entrega", "dos-encoders", "convexa", "filtrado", "familias")
 
 
 def recetas_medibles(

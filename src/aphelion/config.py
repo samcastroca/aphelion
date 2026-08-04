@@ -192,7 +192,16 @@ ENCODERS = {
 
 # Los que se indexan cuando nadie pide otra cosa. El resto del catálogo existe
 # para el barrido y no entra en la entrega salvo que el barrido lo justifique.
-ENCODERS_ENTREGA = ("bge-m3", "me5-large")
+ENCODERS_ENTREGA = ("bge-m3",)
+
+# Cómo se puntúa un documento a partir de sus fragmentos: `max` toma el mejor,
+# `topN` promedia los N mejores.
+#
+# **Medido**: sobre el corpus completo y el entregable real, bge-m3 solo con
+# top2 gana +0,1074 de NDCG@10 frente a los dos encoders con max (p=0,0002,
+# pareado) y cede 0,0213 de F1@3, que es ruido (p=0,51). Recupera además el
+# F1@3 del fenómeno 2, que es donde `max` más perdía (0,7708 -> 0,8750).
+AGREGACION_DOCUMENTOS = "top2"
 
 ENCODER_PRINCIPAL = "bge-m3"
 

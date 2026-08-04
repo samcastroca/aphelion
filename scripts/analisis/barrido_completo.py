@@ -46,7 +46,7 @@ vectores, puntuaciones y metadata (§4.2, §8.3).
 Uso:
     # Candidatas completas, cada una con todos sus parámetros ya fijados
     uv run python -m aphelion.evaluacion.recetas             # ver el catálogo
-    uv run python scripts/analisis/barrido_completo.py --recetas entrega,bge-top2
+    uv run python scripts/analisis/barrido_completo.py --recetas entrega,dos-encoders
     uv run python scripts/analisis/barrido_completo.py --recetas todas
 
     # Preguntando nada: los dos encoders de la entrega, chunking actual
@@ -90,8 +90,11 @@ PROFUNDIDAD_MAXIMA = 200
 
 # Lo que se prueba si no se pide otra cosa: los dos encoders de la entrega sobre
 # el chunking de la entrega, variando solo lo que es gratis variar.
+# Los encoders por defecto son los dos grandes y no `config.ENCODERS_ENTREGA`:
+# desde que la entrega es de un solo encoder, atarlos dejaría al barrido sin
+# nada que fusionar, y comparar fusiones es la mitad de para lo que existe.
 DEFECTOS: dict[str, list] = {
-    "encoders": list(config.ENCODERS_ENTREGA),
+    "encoders": ["bge-m3", "me5-large"],
     "chunks": [config.CHUNK_PRESUPUESTO],
     "solapes": [config.CHUNK_SOLAPE],
     "fusiones": ["rrf", "convexa"],

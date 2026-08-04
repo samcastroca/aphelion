@@ -379,7 +379,7 @@ def _puntaje_documento(puntajes: list[float], modo: str) -> float:
 def agregar_a_documentos(
     candidatos: list[Candidato],
     top: int = config.TOP_DOCUMENTOS,
-    modo: str = "max",
+    modo: str = config.AGREGACION_DOCUMENTOS,
 ) -> list[str]:
     """Max pooling: cada documento hereda la puntuación de su mejor fragmento.
 
@@ -492,7 +492,7 @@ class Recuperador:
         top_fragmentos: int = config.TOP_FRAGMENTOS,
         top_documentos: int = config.TOP_DOCUMENTOS,
         fusion: str = "rrf",
-        agregacion: str = "max",
+        agregacion: str = config.AGREGACION_DOCUMENTOS,
     ) -> Resultado:
         """La parte barata: fusionar, realzar, diversificar y agregar."""
         # El filtro va antes de la fusión y dentro de esta etapa, no en `buscar`:

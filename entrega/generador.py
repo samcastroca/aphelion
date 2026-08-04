@@ -20,7 +20,7 @@ El flujo de recuperación es:
     codificar la consulta con el mismo encoder de la indexación
     buscar en cada índice y fusionar los rankings con RRF
     realzar el fenómeno esperado y diversificar por documento
-    top-10 de fragmentos; max pooling para el top-3 de documentos
+    top-10 de fragmentos; top2 pooling para el top-3 de documentos
     validar el formato antes de escribir
 
 No interviene ningún modelo generativo en ninguna etapa: no hay reordenamiento
@@ -103,9 +103,12 @@ MAX_FRAGMENTS_PER_DOC = 3
 PHENOMENON_BOOST = 1.05
 
 # Cómo se colapsan los fragmentos de un documento en una puntuación: `max` toma
-# el mejor, `topN` promedia los N mejores. Se deja en `max`, que es lo que se
-# entrega; `top2` se admite por línea de comandos porque el barrido lo mide.
-DOCUMENT_AGGREGATION = "max"
+# el mejor, `topN` promedia los N mejores.
+#
+# `top2` es lo que se entrega. Medido sobre el corpus completo y sobre el
+# entregable real, BGE-M3 solo con top2 gana +0,1074 de NDCG@10 frente a los dos
+# encoders con max (p=0,0002, pareado) y cede 0,0213 de F1@3, que es ruido.
+DOCUMENT_AGGREGATION = "top2"
 MAX_WORDS_PER_FRAGMENT = 250
 
 # Post-filtro de la §8.7: descarta de cada índice los candidatos cuya similitud
