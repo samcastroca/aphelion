@@ -24,6 +24,55 @@ def dispositivo_por_defecto() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _sanear_buffers(modelo) -> None:
+    """Rellena los buffers no persistentes que transformers deja sin inicializar.
+
+    Un modelo que trae su implementación en el repositorio del modelo puede
+    calcular buffers en `__init__` y declararlos `persistent=False`, como hace
+    gte-multilingual-base con `position_ids` y las tres tablas de RoPE. Como no
+    están en el checkpoint, transformers 5 los materializa desde el meta device
+    con memoria **sin inicializar** y no vuelve a ejecutar el cálculo que los
+    rellena: `cos_cached` y `sin_cached` salen a cero —RoPE anula queries y
+    keys— y `position_ids` sale con enteros del orden de 1e12 con los que se
+    indexa la tabla de RoPE.
+
+    En GPU eso aborta el proceso con un `device-side assert` a mitad de la
+    codificación. En CPU no aborta nada: devuelve embeddings plausibles y sin
+    sentido, que es la razón por la que esto se repara y no se deja pasar.
+
+    `position_ids` sirve de detector porque su valor correcto se conoce sin
+    ambigüedad; los encoders cuyo buffer llega bien (bge-m3, la familia e5) no
+    se tocan. La reparación reejecuta la propia lógica del modelo —`_init_rope`—
+    en vez de reimplementar el cálculo de las tablas aquí.
+    """
+    import torch
+
+    emb = getattr(modelo[0].auto_model, "embeddings", None)
+    pos = getattr(emb, "position_ids", None)
+    if pos is None:
+        return
+
+    dispositivo = pos.device
+    esperado = torch.arange(pos.numel(), device=dispositivo).view(pos.shape)
+    if torch.equal(pos, esperado):
+        return
+
+    emb.register_buffer("position_ids", esperado, persistent=False)
+    if hasattr(emb, "_init_rope"):
+        # Construye las tablas de RoPE en CPU, como en la carga original.
+        emb._init_rope(modelo[0].auto_model.config)
+        emb.to(dispositivo)
+
+    # Sin esto la reparación silenciosa sería el mismo fallo de antes con otro
+    # disfraz: si una versión futura cambia los nombres, tiene que verse aquí.
+    for nombre, buffer in emb.named_buffers():
+        if nombre.endswith(("cos_cached", "sin_cached")) and buffer.abs().max() == 0:
+            raise RuntimeError(
+                f"{nombre} sigue sin inicializar tras sanear los buffers; "
+                "el encoder produciría embeddings sin sentido."
+            )
+
+
 class Encoder:
     def __init__(self, nombre: str, device: str | None = None):
         if nombre not in config.ENCODERS:
@@ -50,6 +99,7 @@ class Encoder:
             self._modelo = SentenceTransformer(
                 self.cfg["modelo"], device=self.device, **extra
             )
+            _sanear_buffers(self._modelo)
             # El límite del modelo manda sobre el presupuesto de chunking.
             self._modelo.max_seq_length = min(
                 self.cfg["max_tokens"], self._modelo.max_seq_length
