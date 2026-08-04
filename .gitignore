@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 
+# Instrucciones para Claude Code: herramienta local, no documentación del
+# proyecto. Lo que el equipo tiene que saber vive en README.md y docs/DISENO.md.
+CLAUDE.md
+
 # Artefactos intermedios del pipeline (regenerables)
 trabajo/
 
