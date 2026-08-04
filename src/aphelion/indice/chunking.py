@@ -297,6 +297,7 @@ def fragmentar(
     # El presupuesto reserva unos tokens para los especiales y el prefijo
     # "passage: " de E5: un fragmento a ventana completa se truncaría en silencio.
     max_tokens: int = config.CHUNK_PRESUPUESTO,
+    solape: float = config.CHUNK_SOLAPE,
 ) -> list[Fragmento]:
     """Convierte un documento limpio en su lista de fragmentos."""
     if not texto.strip():
@@ -314,6 +315,7 @@ def fragmentar(
         oraciones,
         tokenizador,
         max_tokens=max_tokens,
+        solape=solape,
         # Se pide un margen sobre el tope porque el filtro de fragmentos cortos
         # que sigue puede descartar algunos.
         max_fragmentos=int(config.MAX_FRAGMENTOS_TABULARES * 1.2) if tabular else None,

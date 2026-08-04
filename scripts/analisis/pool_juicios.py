@@ -326,8 +326,28 @@ def escribir_ground_truth(
                 + "\n"
             )
 
+    # El texto de cada fragmento juzgado, aparte. Sin esto los juicios solo
+    # sirven para la fragmentación que los originó: al cambiar el tamaño de chunk
+    # los `chunk_id` dejan de existir y hay que emparejar por texto, que es
+    # además como lo hará el jurado (§10.2.1).
+    juzgados = {chunk_id for _, chunk_id in emitidos}
+    with config.GROUND_TRUTH_TEXTOS.open("w", encoding="utf-8") as fh:
+        for clave in sorted(emitidos):
+            chunk_id = clave[1]
+            if chunk_id not in juzgados:
+                continue
+            juzgados.discard(chunk_id)  # una sola línea por chunk_id
+            fh.write(
+                json.dumps(
+                    {"chunk_id": chunk_id, "texto": filas[clave]["texto"]},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
     relevantes = sum(len(d) for d in documentos.values())
     con_doc = sum(1 for q in fragmentos if documentos.get(q))
+    print(f"textos juzgados -> {config.GROUND_TRUTH_TEXTOS}")
     print(f"\nground truth -> {destino}")
     print(f"  {len(fragmentos)} consultas, {relevantes} documentos relevantes")
     print(f"  {len(docs_forzados)} marcados por título (documento sí, fragmento no)")

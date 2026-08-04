@@ -105,6 +105,62 @@ def evaluar(
     }
 
 
+def evaluar_textual(
+    resultados: list[dict],
+    juicios: dict[str, Juicio],
+    emparejadores: dict,
+    mapa_fuente: dict[str, str] | None = None,
+    k_fragmentos: int = 10,
+    k_documentos: int = 3,
+) -> dict:
+    """Como `evaluar`, pero los fragmentos se emparejan por **texto**.
+
+    Es la versión que hace falta para comparar configuraciones con distinta
+    fragmentación: los `chunk_id` de un chunking de 256 tokens no existen en el
+    ground truth, que se anotó sobre 504. Emparejar por texto es además lo que
+    hará el jurado (§10.2.1).
+
+    Los documentos se resuelven a `fuente` si se pasa el mapa, por la misma razón:
+    es la clave con la que empareja el jurado, y el corpus tiene 59 nombres
+    repetidos en 186 archivos.
+    """
+    ndcgs: list[float] = []
+    f1s: list[float] = []
+    por_consulta: dict[str, dict] = {}
+
+    def resolver(doc_id: str) -> str:
+        return mapa_fuente.get(doc_id, doc_id) if mapa_fuente else doc_id
+
+    for resultado in resultados:
+        query_id = resultado["query_id"]
+        juicio = juicios.get(query_id)
+        emparejador = emparejadores.get(query_id)
+        if juicio is None or emparejador is None:
+            continue
+
+        obtenidas = emparejador.relevancias(
+            [f["text"] for f in resultado.get("fragments", [])]
+        )
+        ndcg = ndcg_at_k(obtenidas, emparejador.ideal, k_fragmentos)
+
+        devueltos = [resolver(d["doc_id"]) for d in resultado.get("documents", [])]
+        relevantes = {resolver(d) for d in juicio.documentos}
+        f1 = f1_at_k(devueltos, relevantes, k_documentos)
+
+        ndcgs.append(ndcg)
+        f1s.append(f1)
+        por_consulta[query_id] = {"ndcg@10": round(ndcg, 4), "f1@3": round(f1, 4)}
+
+    return {
+        "consultas_evaluadas": len(ndcgs),
+        "ndcg@10": round(sum(ndcgs) / len(ndcgs), 4) if ndcgs else 0.0,
+        "f1@3": round(sum(f1s) / len(f1s), 4) if f1s else 0.0,
+        "ic_ndcg@10": tuple(round(v, 4) for v in intervalo_bootstrap(ndcgs)),
+        "ic_f1@3": tuple(round(v, 4) for v in intervalo_bootstrap(f1s)),
+        "por_consulta": por_consulta,
+    }
+
+
 def intervalo_bootstrap(
     valores: list[float],
     remuestreos: int = 2000,

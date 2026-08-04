@@ -1,13 +1,32 @@
 """Construcción del archivo de resultados.
 
-Cada fragmento devuelto puede tener como máximo 250 palabras. Los
-fragmentos del índice se dimensionan en tokens (512), lo que en español suele
-quedar por debajo de ese límite pero puede excederlo. Hay dos salidas:
+Cada fragmento devuelto puede tener como máximo 250 palabras. **Ese límite no
+entra en el presupuesto del chunking**, que se dimensiona en tokens
+(`CHUNK_PRESUPUESTO`, 504) contra la ventana del encoder: lo que se indexa es
+el fragmento completo y el recorte a palabras ocurre aquí, al escribir la
+salida.
 
-- Si un fragmento supera las 250 palabras, se subdivide respetando fronteras
-  oracionales. Cada subfragmento ocupa su propia posición en la lista de diez.
-- Si queda corto, puede concatenarse con fragmentos adyacentes del mismo
-  documento mientras no se rebase el límite.
+Los dos límites no se parecen tanto como sugiere el número. Medido sobre los
+29.005 fragmentos de la submuestra, un fragmento de 504 tokens tiene 316
+palabras de mediana y el 79,9% excede las 250 —el 93,2% de los que están en
+español, que a 1,51 tokens por palabra son más largos que los ingleses a 1,83—.
+O sea que el recorte es el caso normal, no la excepción, y se pierde ~20% de la
+cola del texto entregado. Lo que se codificó fue el fragmento entero, así que la
+recuperación no se degrada; lo que se arriesga es que la frase que justificaba el
+acierto quedara en la cola, porque el jurado empareja sobre el texto entregado
+(§10.2.1). Bajar el presupuesto a ~345 tokens dejaría el 90% por debajo del
+límite sin recortar nada: es una corrida del barrido (`-Chunks 345,504`), no una
+conjetura que haya que resolver aquí.
+
+Hay dos salidas para el fragmento que se pasa:
+
+- Truncarlo en frontera oracional (`recortar_a_limite`). Es lo que se hace, por
+  lo medido en `config.SUBDIVIDIR_FRAGMENTOS`.
+- Subdividirlo en piezas que ocupan cada una su posición entre las diez
+  (`dividir_en_piezas`). Implementado y desactivado.
+
+Si queda corto, puede concatenarse con fragmentos adyacentes del mismo documento
+mientras no se rebase el límite.
 
 En ambos casos el `chunk_id` reportado es el del fragmento original del índice:
 sirve para trazar de dónde salió el texto, no para emparejar con el ground

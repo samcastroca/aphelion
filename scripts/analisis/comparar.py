@@ -153,6 +153,14 @@ def main() -> int:
         help="empareja documentos por doc_id en vez de por fuente (§10.2.1)",
     )
     ap.add_argument("--detalle", action="store_true", help="desglose por consulta")
+    ap.add_argument(
+        "--por-texto",
+        action="store_true",
+        help="empareja los fragmentos por solape de texto y no por chunk_id, que "
+        "es como lo hará el jurado (§10.2.1) y lo único válido si la corrida usó "
+        "otra fragmentación que la del ground truth",
+    )
+    ap.add_argument("--textos", type=Path, default=config.GROUND_TRUTH_TEXTOS)
     args = ap.parse_args()
 
     if not args.ground_truth.exists():
@@ -171,7 +179,22 @@ def main() -> int:
 
     mapa = None if args.por_doc_id else mapa_doc_a_fuente(args.base)
     clave = "doc_id" if args.por_doc_id else "fuente"
-    print(f"emparejamiento de documentos: por {clave}")
+    print(f"emparejamiento de documentos:  por {clave}")
+
+    empar = None
+    if args.por_texto:
+        if not args.textos.exists():
+            print(f"no existe {args.textos}; hace falta para emparejar por texto.")
+            print("  uv run python scripts/analisis/pool_juicios.py --consolidar")
+            return 1
+        from aphelion.evaluacion import emparejamiento
+
+        textos = emparejamiento.cargar_textos(args.textos)
+        empar = emparejamiento.emparejadores(juicios, textos)
+        print(f"emparejamiento de fragmentos: por texto "
+              f"({len(textos):,} juzgados, umbral {emparejamiento.UMBRAL})")
+    else:
+        print("emparejamiento de fragmentos: por chunk_id")
 
     resumenes: list[dict] = []
     etiquetas: list[str] = []
@@ -180,7 +203,15 @@ def main() -> int:
             print(f"  aviso: no existe {ruta}, se omite")
             continue
         resultados = metricas.cargar_resultados(ruta)
-        resumenes.append(evaluar_corrida(resultados, juicios, mapa))
+        if empar is not None:
+            resumen = metricas.evaluar_textual(resultados, juicios, empar, mapa)
+            resumen["por_consulta"] = {
+                q: {**v, "fenomeno": config.fenomeno_de_consulta(q)}
+                for q, v in resumen["por_consulta"].items()
+            }
+        else:
+            resumen = evaluar_corrida(resultados, juicios, mapa)
+        resumenes.append(resumen)
         etiquetas.append(ruta.stem)
 
     if not resumenes:

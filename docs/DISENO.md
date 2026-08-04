@@ -328,6 +328,108 @@ Este conjunto es la base para el barrido de hiperparámetros: tamaño de chunk, 
 
 ---
 
+## 9.bis Ciclo de experimentación
+
+Comparar configuraciones sobre el corpus completo no cabe en el tiempo
+disponible: codificar sus 64.484 fragmentos cuesta horas **por encoder**. El
+ciclo de mejora corre sobre una submuestra y separa lo caro de lo barato.
+
+**La submuestra** (`data/submuestra.json`, versionada) tiene tres capas, en este
+orden de prioridad:
+
+1. **Todo lo que el ground truth toca** —265 documentos— y va entero. Si faltara
+   un documento juzgado, sus juicios se volverían ceros y la métrica mentiría
+   hacia abajo; si faltara uno marcado relevante, el F1@3 de esa consulta tendría
+   techo artificialmente bajo.
+2. **Los negativos difíciles**: documentos que los encoders puntúan alto sin ser
+   relevantes, tomados de los rankings profundos cacheados. Un subconjunto de
+   material relevante más ruido aleatorio es *más fácil* que el corpus real, y una
+   configuración puede verse bien ahí solo porque no compite contra nada.
+3. **Relleno estratificado** por (fenómeno, formato), para no distorsionar la
+   mezcla de idiomas y tipos de archivo.
+
+Resultado: 353 documentos, 28.557 fragmentos, cobertura 1383/1383 de los juicios,
+**2,3 veces menos** que el corpus. Los documentos **no se recortan**, y eso pone
+el suelo en ese 44%: el barrido re-fragmenta y necesita el texto completo, y una
+de las cosas que compara es la agregación a documento —max frente a suma— cuyo
+resultado depende de la longitud real. Recortar los largos sesgaría esa
+comparación a favor de la suma.
+
+**El emparejamiento por texto es obligatorio, no una comodidad.** El ground truth
+se anotó sobre chunks de 504 tokens; al probar 256 o 768 sus `chunk_id` dejan de
+existir y evaluar por identificador daría ceros disfrazados de mediciones.
+`evaluacion/emparejamiento.py` decide la relevancia por solape de n-gramas de 5
+palabras con contención en el sentido más favorable —para que emparejen tanto el
+chunk grande que contiene al juzgado como el pequeño contenido en él—. Es además
+lo que hará el jurado (§10.2.1).
+
+El umbral está **calibrado por las dos caras**, no elegido a ojo:
+
+| umbral | juicios recuperables tras re-fragmentar | NDCG@10 frente al emparejamiento por `chunk_id` |
+|---|---:|---:|
+| 0,60 | 97,0% (los 29 huérfanos entre 0,588 y 0,599) | +0,002 |
+| **0,55** | **99,9%** | **+0,005** |
+
+El sesgo positivo es una décima parte del intervalo de confianza, así que bajar el
+umbral recupera emparejamientos legítimos sin inventar relevancia. Cambiarlo exige
+repetir las dos medidas.
+
+**Un experimento prueba lo que se le pide.** Cada dimensión se elige por separado
+y lo que no se diga toma el valor de la entrega, así que pedir un encoder, un
+chunking, una fusión y una agregación es *una* corrida. El producto completo son
+decenas de miles y sobreajusta: con 50 consultas, elegir el máximo de cientos de
+configuraciones sobre el mismo conjunto da una ganadora que no se sostiene fuera.
+Los presets abren **una** dimensión y dejan el resto fija, que es como se lee un
+resultado sin confundir el efecto de una cosa con el de otra.
+
+**Las recetas** (`evaluacion/recetas.py`) son el otro extremo: configuraciones
+completas, con los doce parámetros fijados, que compiten por entrar a la entrega.
+Una receta es una corrida y trae escrito en qué se basa, de modo que el catálogo
+no es una lista de corazonadas. Nueve, ordenadas para que las que comparten la
+fragmentación de la entrega vayan primero:
+
+| receta | qué cambia | de dónde sale la apuesta |
+|---|---|---|
+| `entrega` | nada; es la vara de medir | sin ella se compara entre candidatas, que es la pregunta equivocada |
+| `bge-top2` | un encoder, agregación top2 | medido: 0,6947 → 0,7067 de F1@3, a 0,014 de lo que da la fusión |
+| `convexa` | fusión convexa normalizada | RRF tira la magnitud; Bruch et al. 2022 la conserva |
+| `familias` | bge-m3 + gte en vez de + mE5 | los dos de la entrega salen de XLM-R y se equivocan igual |
+| `filtrado` | umbral relativo 0,9 | §8.7, implementado y desactivado esperando este número |
+| `barato` | mE5-base solo | si la brecha cabe en el intervalo, el modelo grande no se paga |
+| `sin-recorte` | 345 tokens | el 79,9% de los fragmentos excede las 250 palabras y se entrega truncado |
+| `granular` | 256 tokens, sin solape | más precisión por vector, y ningún fragmento llega al límite |
+| `contexto` | 768 tokens, top3 | la apuesta contraria, sobre la otra métrica |
+
+Cada una se informa como diferencia contra `entrega`, y la mitad del ancho de su
+intervalo marca el suelo por debajo del cual la diferencia no distingue nada. La
+receta `entrega` se comprueba en las pruebas contra `config`: si se desincroniza,
+todas las comparaciones se harían contra algo que no se entrega.
+
+Los fragmentos y los índices se comparten entre experimentos, porque su contenido
+queda determinado por (chunking, encoder); las métricas van por experimento. Los
+pares (chunking, encoder) a construir salen de los planes y no del producto de las
+opciones: `contexto` pide 768 tokens **solo** con BGE-M3, y codificar ahí mE5 sería
+una hora de GPU en un índice truncado que ningún plan va a consultar.
+
+**Truncamiento silencioso.** Codificar un fragmento más largo que la ventana del
+modelo no falla: el tokenizador lo corta y devuelve un vector que no representa la
+cola. Es el peor fallo posible en un barrido, porque produce números plausibles de
+una configuración que nadie está midiendo. `config.cabe_en_ventana` lo comprueba
+contra `max_tokens` más la reserva, las recetas lo tienen como invariante de
+prueba, y la rejilla avisa sin abortar —el resto de sus pares sigue siendo
+informativo—.
+
+**El catálogo de encoders** pasa de dos a siete. `ENCODERS_ENTREGA` son los que se
+indexan para entregar; los otros cinco existen para el barrido y todos son
+arquitecturas encoder con licencia permisiva, como exigen la §4.2 y la §4.3:
+`me5-base` y `me5-small` por baratos —hacen viable barrer el chunking—,
+`me5-large-instruct` por su asimetría instruida, `gte-multilingual-base` porque es
+de otra familia y por eso es el que más consenso *nuevo* puede aportar a la
+fusión, y `labse` como **control**: el informe lo descarta por argumento tomado de
+la literatura, y medirlo convierte esa afirmación en un número propio.
+
+---
+
 ## 10. Grafo de conocimiento (bonus)
 
 Componente opcional, planificado **al final** del cronograma y sacrificable si el tiempo

@@ -156,6 +156,13 @@ def main() -> int:
     ap.add_argument("--lote", type=int, default=32)
     ap.add_argument("--fragmentos", type=Path, default=config.FRAGMENTOS)
     ap.add_argument(
+        "--base",
+        type=Path,
+        help="dónde escribir encoder_<nombre>/. Por defecto la base vectorial de "
+        "la entrega; el barrido usa una carpeta por configuración para no "
+        "sobrescribir el índice que se entrega.",
+    )
+    ap.add_argument(
         "--backend",
         choices=("torch", "onnx"),
         default="torch",
@@ -278,7 +285,7 @@ def main() -> int:
         print(f"  aviso: normas fuera de rango [{normas.min():.4f}, {normas.max():.4f}]")
 
     index = vectores.construir(matriz, encoder.dim)
-    destino = vectores.guardar(args.encoder, index, fragmentos)
+    destino = vectores.guardar(args.encoder, index, fragmentos, args.base)
 
     print(f"\nvectores indexados: {index.ntotal:,}")
     print(f"-> {destino}")

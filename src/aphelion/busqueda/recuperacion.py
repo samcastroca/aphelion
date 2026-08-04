@@ -121,6 +121,60 @@ def fusionar_combsum(
     return sorted(acumulado.values(), key=lambda c: c.puntaje, reverse=True)
 
 
+def fusionar_convexa(
+    rankings: dict[str, list[tuple[dict, float]]],
+    pesos: dict[str, float] | None = None,
+) -> list[Candidato]:
+    """Combinación convexa de similitudes normalizadas por consulta.
+
+    La alternativa que la literatura sitúa por encima de RRF cuando hay
+    etiquetas de relevancia en dominio (Bruch et al., 2022), y el diseño ya la
+    tenía anotada como pendiente de medir. Frente a CombSUM crudo añade la
+    normalización, que es lo que hace comparables dos escalas de coseno
+    distintas; frente a RRF conserva la magnitud, que es la información que
+    reducir a posiciones tira.
+
+    La normalización es min-max **dentro de la consulta y del índice**: el mejor
+    candidato de cada índice vale 1 y el peor 0. Eso hace que la escala absoluta
+    de cada encoder deje de importar sin perder las distancias relativas.
+
+    Con un solo índice el resultado es una reescala monótona de la similitud, así
+    que el orden coincide con el de ese encoder.
+    """
+    acumulado: dict[str, Candidato] = {}
+
+    for encoder, ranking in rankings.items():
+        if not ranking:
+            continue
+        peso = (pesos or {}).get(encoder, 1.0)
+        similitudes = [sim for _, sim in ranking]
+        alto, bajo = max(similitudes), min(similitudes)
+        rango = alto - bajo
+
+        for posicion, (meta, similitud) in enumerate(ranking, start=1):
+            # Si todos empatan, la normalización no está definida: se les da a
+            # todos el mismo valor en vez de dividir por cero.
+            normalizada = 1.0 if rango <= 0 else (similitud - bajo) / rango
+            chunk_id = meta["chunk_id"]
+            candidato = acumulado.get(chunk_id)
+            if candidato is None:
+                candidato = Candidato(
+                    chunk_id=chunk_id,
+                    doc_id=meta["doc_id"],
+                    texto=meta["texto"],
+                    fuente=meta["fuente"],
+                    fenomeno=meta.get("fenomeno", 0),
+                    puntaje=0.0,
+                    posiciones={},
+                    idioma=meta.get("idioma") or "es",
+                )
+                acumulado[chunk_id] = candidato
+            candidato.puntaje += peso * normalizada
+            candidato.posiciones[encoder] = posicion
+
+    return sorted(acumulado.values(), key=lambda c: c.puntaje, reverse=True)
+
+
 def filtrar_por_umbral_relativo(
     ranking: list[tuple[dict, float]],
     umbral: float | None,
@@ -224,9 +278,34 @@ def diversificar(
     return seleccionados
 
 
+def _puntaje_documento(puntajes: list[float], modo: str) -> float:
+    """Colapsa las puntuaciones de los fragmentos de un documento en una.
+
+    - `max`: el mejor fragmento manda. Es el que se entrega; no tiene sesgo de
+      longitud, pero descarta la evidencia repetida.
+    - `suma`: premia acumular fragmentos y por eso tiene sesgo de longitud. Se
+      incluye porque el diseño lo descartó por argumento y conviene medirlo.
+    - `media`: quita el sesgo de longitud de la suma, pero castiga al documento
+      largo que acierta en un párrafo y falla en los demás.
+    - `topN`: media de los N mejores. El punto medio entre `max` y `suma`:
+      recompensa que la evidencia esté concentrada en varios fragmentos buenos
+      sin dejar que cuarenta fragmentos flojos ganen por acumulación.
+    """
+    if modo == "suma":
+        return sum(puntajes)
+    if modo == "media":
+        return sum(puntajes) / len(puntajes)
+    if modo.startswith("top"):
+        n = int(modo[3:])
+        mejores = sorted(puntajes, reverse=True)[:n]
+        return sum(mejores) / len(mejores)
+    return max(puntajes)  # 'max' y cualquier valor desconocido
+
+
 def agregar_a_documentos(
     candidatos: list[Candidato],
     top: int = config.TOP_DOCUMENTOS,
+    modo: str = "max",
 ) -> list[str]:
     """Max pooling: cada documento hereda la puntuación de su mejor fragmento.
 
@@ -244,21 +323,22 @@ def agregar_a_documentos(
     El número de fragmentos recuperados actúa solo como desempate, con peso
     suficientemente pequeño para no alterar el orden principal.
     """
+    puntajes: dict[str, list[float]] = {}
     mejor: dict[str, float] = {}
-    cuenta: dict[str, int] = {}
     representante: dict[str, str] = {}  # fuente -> doc_id del mejor fragmento
 
     for candidato in candidatos:
         clave = candidato.fuente or candidato.doc_id
+        puntajes.setdefault(clave, []).append(candidato.puntaje)
         anterior = mejor.get(clave)
         if anterior is None or candidato.puntaje > anterior:
             mejor[clave] = candidato.puntaje
             representante[clave] = candidato.doc_id
-        cuenta[clave] = cuenta.get(clave, 0) + 1
 
+    agregado = {clave: _puntaje_documento(v, modo) for clave, v in puntajes.items()}
     ordenados = sorted(
-        mejor.items(),
-        key=lambda kv: (kv[1], cuenta[kv[0]] * 1e-9),
+        agregado.items(),
+        key=lambda kv: (kv[1], len(puntajes[kv[0]]) * 1e-9),
         reverse=True,
     )
     return [representante[clave] for clave, _ in ordenados[:top]]
@@ -321,6 +401,7 @@ class Recuperador:
         top_fragmentos: int = config.TOP_FRAGMENTOS,
         top_documentos: int = config.TOP_DOCUMENTOS,
         fusion: str = "rrf",
+        agregacion: str = "max",
     ) -> Resultado:
         """La parte barata: fusionar, realzar, diversificar y agregar."""
         # El filtro va antes de la fusión y dentro de esta etapa, no en `buscar`:
@@ -332,6 +413,8 @@ class Recuperador:
             }
         if fusion == "combsum":
             candidatos = fusionar_combsum(rankings)
+        elif fusion == "convexa":
+            candidatos = fusionar_convexa(rankings)
         else:
             candidatos = fusionar_rrf(rankings, self.k0)
         candidatos = aplicar_boost_fenomeno(candidatos, consulta.fenomeno, self.boost)
@@ -346,7 +429,7 @@ class Recuperador:
         fragmentos = diversificar(
             sin_duplicados(candidatos), top_fragmentos * 3, self.max_por_doc
         )
-        documentos = agregar_a_documentos(candidatos, top_documentos)
+        documentos = agregar_a_documentos(candidatos, top_documentos, agregacion)
 
         return Resultado(consulta.query_id, documentos, fragmentos)
 

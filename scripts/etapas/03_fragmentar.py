@@ -32,9 +32,10 @@ from aphelion.ingesta import limpieza
 _OPCIONES: dict = {}
 
 
-def _inicializar(encoder: str, max_tokens: int) -> None:
+def _inicializar(encoder: str, max_tokens: int, solape: float) -> None:
     _OPCIONES["encoder"] = encoder
     _OPCIONES["max_tokens"] = max_tokens
+    _OPCIONES["solape"] = solape
     # Fuerza la carga del tokenizador aquí y no en la primera tarea, para que el
     # coste aparezca una vez por worker y no distorsione la barra de progreso.
     chunking._tokenizador(encoder)
@@ -61,6 +62,7 @@ def _procesar(ruta: str) -> tuple[str, list[dict]]:
         idioma,
         nombre_encoder=_OPCIONES["encoder"],
         max_tokens=_OPCIONES["max_tokens"],
+        solape=_OPCIONES["solape"],
     )
     if not fragmentos:
         return "sin_fragmentos", []
@@ -71,9 +73,16 @@ def _procesar(ruta: str) -> tuple[str, list[dict]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-tokens", type=int, default=config.CHUNK_PRESUPUESTO)
+    ap.add_argument("--solape", type=float, default=config.CHUNK_SOLAPE)
     ap.add_argument("--salida", type=Path, default=config.FRAGMENTOS)
     ap.add_argument("--encoder", default=config.ENCODER_PRINCIPAL)
     ap.add_argument("--procesos", type=int, default=max(1, (os.cpu_count() or 4) - 1))
+    ap.add_argument(
+        "--docs",
+        type=Path,
+        help="JSON con la lista de doc_id a fragmentar (data/submuestra.json). "
+        "Sin él se fragmenta el corpus entero.",
+    )
     args = ap.parse_args()
 
     archivos = sorted(config.TEXTO_CRUDO.glob("*.json"))
@@ -81,9 +90,25 @@ def main() -> int:
         print("No hay texto extraído. Ejecuta antes scripts/etapas/01_extraer.py")
         return 1
 
+    # Restringir a un subconjunto de documentos es lo que hace viable el barrido:
+    # re-fragmentar y recodificar el corpus entero por cada tamaño de chunk son
+    # horas de GPU por combinación.
+    if args.docs:
+        seleccion = set(json.loads(args.docs.read_text(encoding="utf-8"))["doc_ids"])
+        antes = len(archivos)
+        archivos = [a for a in archivos if a.stem in seleccion]
+        faltan = seleccion - {a.stem for a in archivos}
+        print(f"submuestra: {len(archivos):,} de {antes:,} documentos")
+        if faltan:
+            print(f"  aviso: {len(faltan)} doc_id de la lista no están extraídos: "
+                  f"{sorted(faltan)[:5]}")
+        if not archivos:
+            print("la submuestra no cubre ningún documento extraído")
+            return 1
+
     args.salida.parent.mkdir(parents=True, exist_ok=True)
     print(f"documentos: {len(archivos):,} | procesos: {args.procesos} | "
-          f"max_tokens: {args.max_tokens}")
+          f"max_tokens: {args.max_tokens} | solape: {args.solape}")
 
     # El tokenizador se carga aquí antes de abrir el pool. Si no, los workers
     # salen a por él a la vez y en una máquina nueva son N descargas simultáneas
@@ -103,7 +128,7 @@ def main() -> int:
         with ProcessPoolExecutor(
             max_workers=args.procesos,
             initializer=_inicializar,
-            initargs=(args.encoder, args.max_tokens),
+            initargs=(args.encoder, args.max_tokens, args.solape),
         ) as pool:
             tareas = pool.map(_procesar, [str(a) for a in archivos], chunksize=4)
             for estado, fragmentos in tqdm(

@@ -38,7 +38,18 @@ class Encoder:
         if self._modelo is None:
             from sentence_transformers import SentenceTransformer
 
-            self._modelo = SentenceTransformer(self.cfg["modelo"], device=self.device)
+            # Algunos encoders traen su implementación en el propio repositorio
+            # del modelo en vez de en transformers, y hay que autorizarla. Se
+            # declara por encoder en `config.ENCODERS` y no se activa por defecto:
+            # cargar código arbitrario de un repositorio remoto es una decisión
+            # explícita, no un valor por omisión.
+            extra = {}
+            if self.cfg.get("trust_remote_code"):
+                extra["trust_remote_code"] = True
+
+            self._modelo = SentenceTransformer(
+                self.cfg["modelo"], device=self.device, **extra
+            )
             # El límite del modelo manda sobre el presupuesto de chunking.
             self._modelo.max_seq_length = min(
                 self.cfg["max_tokens"], self._modelo.max_seq_length

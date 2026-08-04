@@ -81,8 +81,14 @@ scripts/
     comparar_encoders.py un resultados.jsonl por encoder, y el fusionado
     pool_anotacion.py    arma el pool de anotación repartido entre personas
     pool_juicios.py      el mismo pool en un solo archivo, para una pasada
-    barrido.py           compara configuraciones de recuperación
+    submuestra.py        elige el subconjunto con el que iterar rápido
+    barrido.py           políticas de recuperación sobre el índice de la entrega
+    barrido_completo.py  corre recetas, presets o una rejilla a medida
 ```
+
+El catálogo de recetas —las configuraciones completas que compiten por entrarse a
+la entrega— vive en `src/aphelion/evaluacion/recetas.py`, junto a las métricas con
+las que se juzgan.
 
 ## Puesta en marcha
 
@@ -392,6 +398,159 @@ uv run python scripts/analisis/comparar.py trabajo/resultados_*.jsonl entrega/re
 ```
 
 Los documentos se emparejan por `fuente` y no por `doc_id`, como hará el jurado.
+Con `--por-texto` los fragmentos también se emparejan por solape de texto en vez
+de por `chunk_id`, que es lo que exige la §10.2.1 y lo único válido si la corrida
+usó otra fragmentación.
+
+## Experimentar: submuestra y barrido
+
+Codificar los 64.484 fragmentos del corpus cuesta horas por encoder, así que
+comparar configuraciones sobre el corpus completo no cabe en el tiempo
+disponible. El ciclo de mejora corre sobre una submuestra:
+
+```powershell
+.\ejecutar.ps1 -Submuestra          # elige los documentos, una vez
+.\ejecutar.ps1                      # menú -> "Experimentar"
+.\ejecutar.ps1 -ListarPruebas       # compara lo ya corrido
+```
+
+### Recetas: candidatas completas
+
+Una **receta** fija *todas* las dimensiones a la vez —encoders, tokens, solape,
+fusión, agregación, realce, tope por documento, profundidad y umbral— y viene con
+la apuesta que hace y en qué se basa. Cada receta es **una corrida**, así que la
+tabla se lee de arriba abajo sin descontar el sobreajuste de haber probado miles
+de variantes, y todas se comparan contra `entrega`, que es lo que está construido
+hoy.
+
+```powershell
+uv run python -m aphelion.evaluacion.recetas       # el catálogo con sus parámetros
+.\ejecutar.ps1 -Recetas entrega,bge-top2           # la comparación que decide
+.\ejecutar.ps1 -Recetas todas
+```
+
+| receta | encoders | tokens/solape | fusión | agregación | apuesta |
+|---|---|---|---|---|---|
+| `entrega` | bge-m3 + me5-large | 504 / 0,15 | RRF | max | la línea base |
+| `bge-top2` | bge-m3 | 504 / 0,15 | — | top2 | el segundo encoder no se paga |
+| `convexa` | bge-m3 + me5-large | 504 / 0,15 | convexa | top2 | la magnitud que RRF tira sí importa |
+| `familias` | bge-m3 + gte-base | 504 / 0,15 | RRF | top2 | fusionar parientes aporta poco |
+| `filtrado` | bge-m3 + me5-large | 504 / 0,15 | RRF, umbral 0,9 | top2 | la cola floja gasta posiciones |
+| `barato` | me5-base | 504 / 0,15 | — | top2 | el modelo grande no se paga |
+| `sin-recorte` | bge-m3 | **345** / 0,15 | — | top2 | entregar el fragmento sin truncar |
+| `granular` | bge-m3 | **256** / **0** | — | max | más precisión en el top-10 |
+| `contexto` | bge-m3 | **768** / 0,15 | — | top3 | más contexto por vector |
+
+El menú (opción *"Correr recetas completas"*) las lista con sus parámetros, su
+apuesta y cuántos índices le faltan a cada una, y se eligen varias con coma. Las
+tres últimas cambian la fragmentación y obligan a re-codificar la submuestra; las
+seis primeras comparten el índice de la entrega.
+
+### A medida, o abriendo una dimensión
+
+**Un experimento prueba lo que se le pide, no todas las combinaciones.** Cada
+dimensión se elige por separado y lo que no se diga toma el valor de la entrega,
+así que pedir un encoder, un chunking, una fusión y una agregación es *una*
+corrida. El menú pregunta cada cosa con selección múltiple —`1,3` toma la primera
+y la tercera, `t` todas— y las etiquetas dicen por qué está cada opción.
+
+Sin menú, lo mismo por parámetros:
+
+```powershell
+.\ejecutar.ps1 -Barrido -Encoders bge-m3,gte-multilingual-base -Fusiones rrf,convexa
+.\ejecutar.ps1 -Barrido -Nombre solo-bge -Encoders bge-m3 -MaxFusion 1
+.\ejecutar.ps1 -Barrido -Chunks 256,504,768 -Solapes 0,0.15
+.\ejecutar.ps1 -Barrido -Preset fusion     # una selección ya hecha
+```
+
+Los presets abren **una** dimensión y dejan el resto fija, que es como se lee un
+resultado sin confundir el efecto de una cosa con el de otra: `chunking`,
+`encoders`, `fusion`, `agregacion`, `politicas`, `todo`, y `rapido` para validar
+la maquinaria en minutos. Un preset sirve para *entender* una dimensión; una
+receta, para *elegir* qué entregar.
+
+**Dónde queda cada cosa.**
+
+```
+pruebas/
+  fragmentos/c504-s015.jsonl        compartido entre experimentos
+  indices/c504-s015/encoder_x/      compartido entre experimentos
+  <nombre>/metricas.jsonl           una línea por corrida, ordenada por Borda
+  <nombre>/resumen.txt              la tabla que se imprimió
+  <nombre>/config.json              qué se pidió, para repetirlo
+```
+
+Los fragmentos y los índices se comparten porque son caros y su contenido queda
+determinado por (chunking, encoder): dos experimentos que pidan el mismo índice
+lo reutilizan en vez de duplicar 117 MB. Las métricas van por experimento, que es
+lo que se compara entre ellos. Nada de esto toca `entrega/`.
+
+**La submuestra.** `scripts/analisis/submuestra.py` escribe `data/submuestra.json`
+con tres capas, en este orden de prioridad:
+
+1. **Todo lo que el ground truth toca** —265 documentos, 24.113 fragmentos— y va
+   entero. Si un documento juzgado faltara, sus juicios se volverían ceros y la
+   métrica mentiría hacia abajo.
+2. **Los negativos difíciles**: documentos que los encoders puntúan alto sin ser
+   relevantes, tomados de los rankings profundos cacheados. Un subconjunto de
+   material relevante más ruido aleatorio es *más fácil* que el corpus real.
+3. **Relleno estratificado** por (fenómeno, formato) hasta el objetivo de
+   fragmentos, para no distorsionar la mezcla de idiomas y tipos de archivo.
+
+Los documentos no se recortan. El barrido re-fragmenta y necesita el texto
+completo, y una de las cosas que compara es la agregación a documento —max frente
+a suma— cuyo resultado depende de la longitud real: recortar los largos sesgaría
+esa comparación a favor de la suma. Por eso el suelo del subconjunto es ese 37%
+de fragmentos y el ahorro real es de unas **2,3 veces**, no de diez.
+
+**Lo caro y lo barato.** `barrido_completo.py` los separa:
+
+- Cambiar **encoder, tamaño de chunk o solape** obliga a re-fragmentar y
+  recodificar. Se hace una vez por combinación y queda cacheado en `pruebas/`.
+- Cambiar **fusión, k₀, realce, diversificación, umbral o agregación** es
+  reordenar candidatos ya en memoria. Cien políticas cuestan lo que una.
+
+De ahí que convenga empezar por el preset `chunking`, que usa el encoder más
+barato del catálogo y descarta media rejilla por una fracción del coste, y solo
+después probar los encoders caros sobre el chunking que haya ganado. Y de ahí que
+las seis primeras recetas compartan la fragmentación de la entrega: entre ellas se
+comparan reordenando lo que ya está codificado.
+
+**Un encoder a la vez.** Al construir los rankings, el barrido carga un encoder,
+hace su pasada por las 50 consultas y lo suelta antes de pedir el siguiente. Dos
+modelos *large* residentes a la vez no caben en una máquina de esta clase: cargar
+BGE-M3 y mE5-large juntos falla con «el archivo de paginación es demasiado
+pequeño» (os error 1455). Como después solo se reordena lo cacheado, ninguno hace
+falta más allá de su pasada.
+
+**El emparejamiento por texto es obligatorio aquí.** El ground truth se anotó
+sobre chunks de 504 tokens; al probar 256 o 768 sus `chunk_id` dejan de existir.
+`src/aphelion/evaluacion/emparejamiento.py` decide la relevancia por solape de
+n-gramas con contención en el sentido más favorable, para que un chunk grande que
+contiene al juzgado y uno pequeño contenido en él emparejen los dos. El umbral
+(0,55) está calibrado por las dos caras: recupera el 99,9% de los juicios tras
+re-fragmentar, y sobre la fragmentación original reproduce el emparejamiento por
+`chunk_id` con una diferencia de 0,005 en NDCG@10 — una décima parte del
+intervalo de confianza.
+
+**Los encoders del catálogo.** `config.ENCODERS` tiene siete; `ENCODERS_ENTREGA`
+son los dos que se indexan para entregar. Los otros cinco existen para el
+barrido, todos arquitecturas encoder con licencia permisiva, como exigen la §4.2
+y la §4.3:
+
+| clave | modelo | dim | por qué está |
+|---|---|---:|---|
+| `bge-m3` | BAAI/bge-m3 | 1024 | el principal actual |
+| `me5-large` | intfloat/multilingual-e5-large | 1024 | el complementario actual |
+| `me5-base` | intfloat/multilingual-e5-base | 768 | barato: barre chunking en minutos |
+| `me5-small` | intfloat/multilingual-e5-small | 384 | el más barato del catálogo |
+| `me5-large-instruct` | intfloat/multilingual-e5-large-instruct | 1024 | asimetría instruida, para el caso es→en |
+| `gte-multilingual-base` | Alibaba-NLP/gte-multilingual-base | 768 | familia distinta: más consenso nuevo en la fusión |
+| `labse` | sentence-transformers/LaBSE | 768 | **control**: el informe lo descarta por argumento, esto lo mide |
+
+Quedan fuera por licencia Jina v3 (CC-BY-NC-4.0) y por arquitectura cualquier
+derivado de un backbone autoregresivo —Qwen3-Embedding, e5-mistral— por más que
+lideren MTEB. La primera corrida descarga el modelo que falte.
 
 ## Notas de diseño que conviene no perder
 

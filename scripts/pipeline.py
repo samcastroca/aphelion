@@ -191,7 +191,9 @@ def comprobar_entorno(
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--encoders", default=",".join(config.ENCODERS))
+    # Los de la entrega, no el catálogo entero: `config.ENCODERS` incluye los
+    # candidatos del barrido, y usarlo aquí indexaría siete modelos por defecto.
+    ap.add_argument("--encoders", default=",".join(config.ENCODERS_ENTREGA))
     ap.add_argument("--desde", help="nombre de etapa desde la que reanudar")
     ap.add_argument("--sin-ocr", action="store_true", help="omite la etapa de OCR")
     ap.add_argument(

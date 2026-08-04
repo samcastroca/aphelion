@@ -28,6 +28,80 @@
     Fragmentos por lote de codificación. Por defecto 8 en DirectML y 128 en CUDA.
     Bájalo si la GPU se queda sin memoria.
 
+.PARAMETER Submuestra
+    Elige el subconjunto de documentos con el que iterar rápido y sale. Mantiene
+    dentro todo lo que el ground truth toca, añade los negativos que los encoders
+    puntúan alto sin ser relevantes, y completa con un muestreo estratificado.
+    Escribe data\submuestra.json, que es lo que consume el barrido.
+
+    Exige tener anotado el ground truth y el índice de referencia construido.
+
+.PARAMETER Barrido
+    Corre un experimento sobre la submuestra con las opciones que se le pidan y
+    guarda sus métricas en pruebas\<nombre>\. No prueba todas las combinaciones:
+    cada dimensión se elige por separado, y lo que no se diga toma su valor de la
+    entrega. Sin más parámetros el menú pregunta cada cosa.
+
+.PARAMETER Recetas
+    Configuraciones **completas** a correr, por nombre y separadas por comas, o
+    "todas". Cada receta trae ya todos sus parámetros —encoders, tokens, solape,
+    fusión, agregación, realce, tope por documento, profundidad y umbral— junto
+    con la apuesta que hace y en qué se basa. Cada una es una corrida, así que la
+    tabla que sale se lee de arriba abajo sin descontar sobreajuste, y todas se
+    comparan contra la receta `entrega`, que es lo que está construido hoy.
+
+      entrega      la línea base: lo que se entrega hoy
+      bge-top2     un solo encoder, agregando por los dos mejores fragmentos
+      convexa      fusionar por similitud normalizada en vez de por posición
+      familias     fusionar dos familias distintas en vez de dos parientes
+      filtrado     descartar la cola floja de cada índice antes de fusionar
+      barato       ¿hace falta un modelo grande?
+      sin-recorte  fragmentos que quepan enteros en las 250 palabras del reto
+      granular     fragmentos cortos y sin solape, apostando al NDCG@10
+      contexto     fragmentos largos y top3, apostando al F1@3
+
+    El catálogo con sus parámetros y sus motivos:
+        uv run python -m aphelion.evaluacion.recetas
+
+.PARAMETER Preset
+    Una selección ya hecha, para las preguntas que suelen interesar. Abre una
+    dimensión y deja el resto fija, que es como se lee un resultado sin confundir
+    el efecto de una cosa con el de otra. A diferencia de una receta, no fija
+    todos los parámetros: sirve para entender una dimensión, no para elegir qué
+    entregar.
+
+      rapido      Valida la maquinaria en minutos. No decide nada.
+      chunking    Tamaño de chunk y solape, con el encoder más barato. El primer
+                  paso: descarta media rejilla por una fracción del coste.
+      encoders    Qué encoder solo y qué pares, sobre el chunking ya elegido.
+      fusion      RRF frente a CombSUM frente a la convexa normalizada, y k0.
+      agregacion  Max, suma, media y top-N para pasar de fragmentos a documentos.
+      politicas   Todo lo barato, con encoders y chunking fijos.
+      todo        El catálogo entero. Es una noche de GPU.
+
+.PARAMETER Nombre
+    Nombre del experimento, que da nombre a su carpeta en pruebas\. Por defecto
+    el preset más la fecha.
+
+.PARAMETER Chunks
+    Tokens por fragmento a probar, uno o varios: -Chunks 256,504,768
+
+.PARAMETER Solapes
+    Fracciones de solape a probar: -Solapes 0,0.15
+
+.PARAMETER Fusiones
+    Cómo combinar dos espacios vectoriales: rrf, combsum, convexa.
+
+.PARAMETER Agregaciones
+    Cómo pasar de fragmentos a documentos: max, suma, media, top2, top3.
+
+.PARAMETER MaxFusion
+    Cuántos encoders puede fusionar una corrida a la vez. 1 los prueba solo por
+    separado; 2 añade los pares. Por defecto 2.
+
+.PARAMETER ListarPruebas
+    Muestra lo mejor de cada experimento ya corrido y sale.
+
 .PARAMETER Reparto
     Porcentaje de los bloques que codifica esta máquina, como A:B. Prepara los
     fragmentos si no están, codifica su tramo y se detiene: no empaqueta, porque
@@ -45,6 +119,15 @@
     .\ejecutar.ps1 -Auto                       # sin preguntar, todo por defecto
     .\ejecutar.ps1 -Desde 04_indexar:bge-m3    # reanudar tras un fallo
     .\ejecutar.ps1 -SoloEntorno                # preparar sin procesar nada
+
+    # Experimentación: primero la submuestra, después los experimentos
+    .\ejecutar.ps1 -Submuestra
+    .\ejecutar.ps1 -Barrido -Recetas entrega,bge-top2   # la comparación que decide
+    .\ejecutar.ps1 -Barrido -Recetas todas
+    .\ejecutar.ps1 -Barrido -Preset chunking
+    .\ejecutar.ps1 -Barrido -Encoders bge-m3,gte-multilingual-base -Fusiones rrf,convexa
+    .\ejecutar.ps1 -Barrido -Nombre solo-bge -Encoders bge-m3 -MaxFusion 1
+    .\ejecutar.ps1 -ListarPruebas             # comparar lo ya corrido
 
     .\ejecutar.ps1 -Encoders bge-m3            # un solo encoder
     .\ejecutar.ps1 -Encoders bge-m3,me5-large -Lote 64
@@ -68,7 +151,24 @@ param(
     [switch]$Forzar,
     [ValidatePattern('^\d+(\.\d+)?:\d+(\.\d+)?$')]
     [string]$Reparto,
-    [switch]$Auto
+    [switch]$Auto,
+    [switch]$Submuestra,
+    [switch]$Barrido,
+    # Sin ValidateSet: el catálogo de recetas vive en Python y duplicar los
+    # nombres aquí haría que añadir una receta dejara el guion rechazándola.
+    [string[]]$Recetas,
+    [ValidateSet('rapido', 'chunking', 'encoders', 'fusion', 'agregacion', 'politicas', 'todo')]
+    [string]$Preset,
+    [string]$Nombre,
+    [int[]]$Chunks,
+    [double[]]$Solapes,
+    [ValidateSet('rrf', 'combsum', 'convexa')]
+    [string[]]$Fusiones,
+    [ValidateSet('max', 'suma', 'media', 'top2', 'top3')]
+    [string[]]$Agregaciones,
+    [ValidateRange(1, 4)]
+    [int]$MaxFusion,
+    [switch]$ListarPruebas
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,6 +232,70 @@ function Elegir($titulo, [string[]]$opciones, $porDefecto = 1) {
     }
 }
 
+function ElegirVarias($titulo, [string[]]$etiquetas, [string[]]$valores, $porDefecto,
+                      [string[]]$notas = @()) {
+    <#
+        Selección múltiple: "1,3" toma la primera y la tercera, "t" toma todas.
+
+        Devuelve los valores elegidos, no sus índices, para que quien llama no
+        tenga que volver a mapear. Un experimento se define eligiendo varias
+        opciones de varias dimensiones, y preguntarlas de una en una obligaría a
+        correr el guion tantas veces como valores se quieran probar.
+
+        `notas` añade una segunda línea a cada opción. La usan las recetas, donde
+        la etiqueta son los parámetros y la nota es la apuesta que hacen: elegir
+        entre nueve configuraciones sin saber qué apuesta cada una no es elegir.
+    #>
+    Paso $titulo
+    for ($i = 0; $i -lt $etiquetas.Count; $i++) {
+        Write-Host ("  {0}) {1}" -f ($i + 1), $etiquetas[$i])
+        if ($i -lt $notas.Count -and $notas[$i]) {
+            Write-Host ("       {0}" -f $notas[$i]) -ForegroundColor DarkGray
+        }
+    }
+    Write-Host "  t) todas"
+    while ($true) {
+        $r = Leer "Elige (varias con coma)" $porDefecto
+        if ($r -eq 't') { return $valores }
+        $piezas = $r -split '[,\s]+' | Where-Object { $_ }
+        $malas = $piezas | Where-Object {
+            $_ -notmatch '^\d+$' -or [int]$_ -lt 1 -or [int]$_ -gt $etiquetas.Count
+        }
+        if (-not $malas -and $piezas.Count) {
+            # Sin duplicados y en el orden en que están listadas, que es el orden
+            # de coste creciente: así una corrida interrumpida deja lo barato hecho.
+            $indices = $piezas | ForEach-Object { [int]$_ - 1 } | Select-Object -Unique | Sort-Object
+            return @($indices | ForEach-Object { $valores[$_] })
+        }
+        Aviso "Números entre 1 y $($etiquetas.Count), separados por coma. O 't'."
+    }
+}
+
+function LeerRecetas {
+    <#
+        El catálogo de recetas, tal como lo declara Python.
+
+        Se lee y no se copia: si las etiquetas estuvieran escritas aquí, añadir
+        una receta o cambiarle un parámetro dejaría el menú describiendo algo que
+        ya no es. Cada línea trae nombre, configuración, apuesta y coste.
+
+        Va por el intérprete del entorno y no por `uv run`, que sincroniza contra
+        los extras que se le pasen: uno sin --extra cuda desinstalaría el torch de
+        CUDA en medio del menú. Si el entorno no está preparado todavía devuelve
+        vacío, y quien llama decide qué hacer.
+    #>
+    $python = ".venv\Scripts\python.exe"
+    if (-not (Test-Path $python)) { return @() }
+    $previo = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $python -m aphelion.evaluacion.recetas --tsv 2>$null |
+            Where-Object { $_ -match "`t" }
+    } finally {
+        $ErrorActionPreference = $previo
+    }
+}
+
 Paso "Comprobando uv"
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Aviso "uv no está instalado. Instalándolo..."
@@ -169,7 +333,133 @@ if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
             "Codificar solo mi parte, repartiendo entre varias PCs"
             "Reanudar desde una etapa                         (tras un fallo)"
             "Solo preparar el entorno, sin procesar nada"
+            "Experimentar: submuestra y barrido de configuraciones"
         )) {
+        5 {
+            # La submuestra y los experimentos son el ciclo de mejora, no la
+            # entrega: se apoyan en el ground truth anotado y en el índice de
+            # referencia, y no tocan ni entrega\ ni resultados.jsonl.
+            switch (Elegir "Qué parte del ciclo" @(
+                    "Elegir la submuestra de documentos       (primero esto)"
+                    "Correr recetas completas                 (lo normal: candidatas a entregar)"
+                    "Configurar un experimento a medida       (elegir cada opción)"
+                    "Abrir una sola dimensión                 (preset: para entenderla)"
+                    "Ver los experimentos ya corridos"
+                    "Validar la maquinaria en minutos"
+                ) 2) {
+                1 { $Submuestra = [switch]$true }
+                2 {
+                    $Barrido = [switch]$true
+
+                    $catalogo = @(LeerRecetas)
+                    if ($catalogo.Count) {
+                        $nombres = @(); $etiquetas = @(); $apuestas = @()
+                        foreach ($fila in $catalogo) {
+                            $campos = $fila -split "`t"
+                            $nombres += $campos[0]
+                            $etiquetas += ("{0,-13} {1}" -f $campos[0], $campos[1])
+                            $apuestas += ("{0}  ({1})" -f $campos[2], $campos[3])
+                        }
+                        # Por defecto la entrega y la candidata con mejor indicio
+                        # medido: es la comparación que decide si el segundo
+                        # encoder sigue justificándose.
+                        $Recetas = ElegirVarias `
+                            "Qué recetas correr (cada una es una corrida)" `
+                            $etiquetas $nombres "1,2" $apuestas
+                    } else {
+                        Aviso "El catálogo se lee del entorno, que aún no está preparado."
+                        Aviso "Se correrán 'entrega' y 'bge-top2'; para verlo todo:"
+                        Aviso "  uv run python -m aphelion.evaluacion.recetas"
+                        $Recetas = @("entrega", "bge-top2")
+                    }
+
+                    # Windows PowerShell 5.1 no tiene operador ternario.
+                    $base = if ($Recetas.Count -eq 1) { $Recetas[0] } else { "recetas" }
+                    $Nombre = Leer "Nombre del experimento" (
+                        "{0}-{1}" -f $base, (Get-Date -Format "HHmm")
+                    )
+                }
+                3 {
+                    $Barrido = [switch]$true
+
+                    # Las etiquetas llevan por qué está cada opción: elegir a
+                    # ciegas entre siete encoders no es elegir.
+                    $Encoders = ElegirVarias "Qué encoders probar" @(
+                        "me5-small              384d  el más barato del catálogo"
+                        "me5-base               768d  barato y más capaz"
+                        "bge-m3                1024d  el principal de la entrega"
+                        "me5-large             1024d  el complementario de la entrega"
+                        "gte-multilingual-base  768d  familia distinta, más consenso nuevo"
+                        "me5-large-instruct    1024d  asimetría instruida, para es->en"
+                        "labse                  768d  control: el informe lo descarta"
+                    ) @(
+                        "me5-small", "me5-base", "bge-m3", "me5-large",
+                        "gte-multilingual-base", "me5-large-instruct", "labse"
+                    ) "3,4"
+
+                    if ($Encoders.Count -gt 1) {
+                        $MaxFusion = switch (Elegir "Cómo probarlos" @(
+                                "Solos y por pares   (mide qué aporta la fusión)"
+                                "Solo por separado   (más rápido)"
+                            )) {
+                            2 { 1 }
+                            default { 2 }
+                        }
+                    } else {
+                        $MaxFusion = 1
+                    }
+
+                    $Chunks = [int[]](ElegirVarias "Tokens por fragmento" @(
+                        "256   más granularidad, favorece al NDCG@10"
+                        "504   el de la entrega"
+                        "768   más contexto, favorece al F1@3"
+                    ) @("256", "504", "768") "2")
+
+                    $Solapes = [double[]](ElegirVarias "Solape entre fragmentos" @(
+                        "0      sin solape; hay evidencia de que no aporta"
+                        "0.15   el de la entrega, cuesta un 15% de vectores"
+                    ) @("0", "0.15") "2")
+
+                    $Fusiones = ElegirVarias "Cómo fusionar los rankings" @(
+                        "rrf       por posiciones; el de la entrega"
+                        "combsum   suma las similitudes crudas"
+                        "convexa   suma las similitudes normalizadas"
+                    ) @("rrf", "combsum", "convexa") "1,3"
+
+                    $Agregaciones = ElegirVarias "Cómo pasar de fragmentos a documentos" @(
+                        "max     el mejor fragmento manda; el de la entrega"
+                        "suma    acumula; tiene sesgo de longitud"
+                        "media   sin sesgo de longitud, castiga al documento largo"
+                        "top2    media de los dos mejores"
+                        "top3    media de los tres mejores"
+                    ) @("max", "suma", "media", "top2", "top3") "1,4"
+
+                    $Nombre = Leer "Nombre del experimento" (
+                        "{0}-{1}" -f ($Encoders -join "+"), (Get-Date -Format "HHmm")
+                    )
+                }
+                4 {
+                    $Barrido = [switch]$true
+                    $Preset = switch (Elegir "Qué dimensión abrir" @(
+                            "chunking     tamaño de chunk y solape, encoder barato"
+                            "encoders     qué encoder solo y qué pares"
+                            "fusion       RRF vs CombSUM vs convexa, y k0"
+                            "agregacion   max, suma, media, top-N"
+                            "politicas    todo lo barato, encoders fijos"
+                            "todo         el catálogo entero (una noche de GPU)"
+                        )) {
+                        1 { "chunking" }
+                        2 { "encoders" }
+                        3 { "fusion" }
+                        4 { "agregacion" }
+                        5 { "politicas" }
+                        6 { "todo" }
+                    }
+                }
+                5 { $ListarPruebas = [switch]$true }
+                6 { $Barrido = [switch]$true; $Preset = "rapido" }
+            }
+        }
         2 {
             $maquinas = 1 + (Elegir "Entre cuántas máquinas se reparte" @(
                     "2 máquinas"
@@ -277,7 +567,9 @@ if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
         4 { $SoloEntorno = [switch]$true }
     }
 
-    if (-not $SoloEntorno) {
+    # La submuestra y el barrido eligen sus propios encoders —el barrido los
+    # barre, que es el punto— así que preguntar aquí no tendría sentido.
+    if (-not $SoloEntorno -and -not $Submuestra -and -not $Barrido) {
         $Encoders = switch (Elegir "Qué encoders indexar" @(
                 "Los dos: bge-m3 y me5-large   (mejor recuperación, el doble de tiempo)"
                 "Solo bge-m3                   (la mitad de tiempo)"
@@ -296,7 +588,42 @@ if ($PSBoundParameters.Count -eq 0 -and -not $Auto) {
     }
 }
 
-if ($Reparto) {
+# Listar los experimentos ya corridos no necesita entorno, ni GPU, ni corpus: son
+# archivos en pruebas\. Se atiende antes de todo lo demás.
+if ($ListarPruebas) {
+    Paso "Experimentos corridos"
+    & (Get-Command uv -CommandType Application | Select-Object -First 1).Source `
+        run python scripts/analisis/barrido_completo.py --listar
+    exit $LASTEXITCODE
+}
+
+# Pedir recetas o un preset es pedir un experimento. Sin esto, `-Recetas todas` a
+# secas se pondría a construir la entrega, que es lo contrario de lo que se pidió.
+if (($Recetas -or $Preset) -and -not $Barrido) { $Barrido = [switch]$true }
+
+$experimento = $Submuestra -or $Barrido
+
+if ($experimento) {
+    # El ciclo de experimentación no parte del corpus sino del texto ya
+    # extraído y del ground truth anotado. No toca la entrega.
+    Paso "Insumos del experimento"
+    $faltan = @()
+    if (-not (Test-Path "trabajo\texto")) { $faltan += "trabajo\texto\ (corre antes 01_extraer)" }
+    if (-not (Test-Path "data\ground_truth.jsonl")) { $faltan += "data\ground_truth.jsonl" }
+    if ($Barrido -and -not (Test-Path "data\ground_truth_textos.jsonl")) {
+        $faltan += "data\ground_truth_textos.jsonl (pool_juicios.py --consolidar)"
+    }
+    if ($Barrido -and -not (Test-Path "data\submuestra.json")) {
+        $faltan += "data\submuestra.json (.\ejecutar.ps1 -Submuestra)"
+    }
+    if ($faltan.Count) {
+        Write-Host "  Faltan insumos:" -ForegroundColor Red
+        $faltan | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        exit 1
+    }
+    $n = (Get-ChildItem "trabajo\texto" -File | Measure-Object).Count
+    Bien "$n documentos extraídos, ground truth presente"
+} elseif ($Reparto) {
     # Quien solo codifica un tramo no parte del corpus, sino del archivo de
     # fragmentos que ya produjo la coordinadora. Regenerarlo aquí daría otro
     # archivo y sus vectores no encajarían con los de nadie.
@@ -350,8 +677,8 @@ if ($nvidia) {
     }
 }
 
-# Con reparto no se extrae nada, así que el OCR no entra en juego.
-if (-not $Reparto) {
+# Con reparto o experimentando no se extrae nada, así que el OCR no entra en juego.
+if (-not $Reparto -and -not $experimento) {
     Paso "Tesseract (OCR)"
     $cacheOcr = "data\ocr.jsonl"
     $enCache = if (Test-Path $cacheOcr) { (Get-Content $cacheOcr | Measure-Object -Line).Lines } else { 0 }
@@ -369,6 +696,58 @@ if ($SoloEntorno) {
     Paso "Entorno listo"
     Write-Host "  Lanza el proceso con: .\ejecutar.ps1" -ForegroundColor Green
     exit 0
+}
+
+if ($Submuestra) {
+    Paso "Submuestra"
+    CorrerUv (@("run") + $script:Extras + @("python", "scripts/analisis/submuestra.py"))
+    exit $LASTEXITCODE
+}
+
+if ($Barrido) {
+    Paso "Experimento"
+    $argumentos = @("run") + $script:Extras +
+        @("python", "scripts/analisis/barrido_completo.py")
+
+    if ($Recetas) { $argumentos += @("--recetas", ($Recetas -join ",")) }
+    if ($Preset) { $argumentos += @("--preset", $Preset) }
+    if ($Nombre) { $argumentos += @("--nombre", $Nombre) }
+    if ($Encoders) { $argumentos += @("--encoders", ($Encoders -join ",")) }
+    if ($Chunks) { $argumentos += @("--chunks", ($Chunks -join ",")) }
+    if ($Solapes) {
+        # La coma decimal de una configuración regional en español no la entiende
+        # Python: 0,15 llegaría partido en dos valores. Se fuerza el punto.
+        $texto = ($Solapes | ForEach-Object {
+                $_.ToString([cultureinfo]::InvariantCulture)
+            }) -join ","
+        $argumentos += @("--solapes", $texto)
+    }
+    if ($Fusiones) { $argumentos += @("--fusiones", ($Fusiones -join ",")) }
+    if ($Agregaciones) { $argumentos += @("--agregaciones", ($Agregaciones -join ",")) }
+    if ($MaxFusion) { $argumentos += @("--max-fusion", $MaxFusion) }
+
+    # El backend y el lote los decide el mismo hardware que en el pipeline: sin
+    # esto, un experimento en la Radeon iría por CPU y tardaría días.
+    if ($Backend) {
+        $argumentos += @("--backend", $Backend)
+    } elseif ($radeon) {
+        $argumentos += @("--backend", "onnx")
+    }
+    if ($Lote) {
+        $argumentos += @("--lote", $Lote)
+    } elseif ($radeon) {
+        $argumentos += @("--lote", "8")
+    } elseif ($nvidia) {
+        $argumentos += @("--lote", "128")
+    }
+
+    CorrerUv @argumentos
+    $codigo = $LASTEXITCODE
+    if ($codigo -eq 0) {
+        Write-Host ""
+        Write-Host "  Compáralo con los anteriores: .\ejecutar.ps1 -ListarPruebas" -ForegroundColor Green
+    }
+    exit $codigo
 }
 
 Paso "Pipeline"

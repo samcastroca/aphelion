@@ -24,6 +24,17 @@ OCR_CACHE = DATOS / "ocr.jsonl"
 ANOTACION = DATOS / "anotacion"  # un CSV por anotador
 GROUND_TRUTH = DATOS / "ground_truth.jsonl"
 
+# Texto de los fragmentos juzgados, indexado por chunk_id. Se versiona junto al
+# ground truth porque sin él los juicios solo sirven para la fragmentación que
+# los originó: al cambiar el tamaño de chunk los `chunk_id` dejan de existir y la
+# relevancia hay que emparejarla por texto, que es además como lo hará el jurado
+# (§10.2.1).
+GROUND_TRUTH_TEXTOS = DATOS / "ground_truth_textos.jsonl"
+
+# Subconjunto de documentos para iterar rápido. Se versiona: comparar dos
+# configuraciones solo tiene sentido si ambas vieron el mismo corpus.
+SUBMUESTRA = DATOS / "submuestra.json"
+
 # Documentación. El informe se redacta en español y se exporta a PDF a la entrega.
 DOCS = RAIZ / "docs"
 
@@ -33,6 +44,38 @@ TEXTO_CRUDO = TRABAJO / "texto"  # un .json por documento extraído
 ONNX = TRABAJO / "onnx"  # modelos exportados para la GPU Radeon
 FRAGMENTOS = TRABAJO / "fragmentos.jsonl"
 CONSULTAS = TRABAJO / "consultas.jsonl"
+
+# Experimentación. Los índices y los fragmentos se comparten entre experimentos
+# porque son caros y su contenido queda determinado por (chunking, encoder): dos
+# experimentos que pidan el mismo índice deben reutilizarlo, no duplicar 117 MB.
+# Las métricas, en cambio, van por experimento, que es lo que se compara.
+#
+#   pruebas/fragmentos/c504-s015.jsonl        compartido
+#   pruebas/indices/c504-s015/encoder_X/      compartido
+#   pruebas/<nombre>/metricas.jsonl           por experimento
+#   pruebas/<nombre>/resumen.txt              por experimento
+#   pruebas/<nombre>/config.json              por experimento
+PRUEBAS = RAIZ / "pruebas"
+PRUEBAS_FRAGMENTOS = PRUEBAS / "fragmentos"
+PRUEBAS_INDICES = PRUEBAS / "indices"
+
+
+def clave_chunking(chunk: int, solape: float) -> str:
+    """(504, 0.15) -> 'c504-s015'.
+
+    Identifica qué fragmentación produjo unos artefactos. Vive aquí y no en el
+    barrido porque la usan tanto quien escribe los índices como quien decide si
+    ya existen, y dos versiones de esta cadena harían que la caché no acertara.
+    """
+    return f"c{chunk}-s{int(round(solape * 100)):03d}"
+
+
+def ruta_fragmentos_prueba(chunk: int, solape: float) -> Path:
+    return PRUEBAS_FRAGMENTOS / f"{clave_chunking(chunk, solape)}.jsonl"
+
+
+def ruta_indices_prueba(chunk: int, solape: float) -> Path:
+    return PRUEBAS_INDICES / clave_chunking(chunk, solape)
 
 # Entregable
 ENTREGA = RAIZ / "entrega"
@@ -67,7 +110,89 @@ ENCODERS = {
         # con el CLS de BGE-M3.
         "pooling": "mean",
     },
+    # --- Candidatos para el barrido -----------------------------------------
+    # Todos son arquitecturas **encoder** con licencia permisiva, que es lo que
+    # el reto exige (§4.2 prohíbe los decoders y §4.3 pide licencia libre).
+    # Quedan fuera por licencia Jina v3 (CC-BY-NC-4.0) y por arquitectura
+    # cualquier derivado de un backbone autoregresivo, como Qwen3-Embedding o
+    # e5-mistral, por más que lideren MTEB.
+    #
+    # `dim` se verifica al construir el índice —`vectores.construir` compara la
+    # forma real de la matriz— así que un valor equivocado aquí falla ruidoso y
+    # no en silencio.
+    "me5-base": {
+        # La mitad de dimensión y un tercio de parámetros que me5-large. Entra
+        # porque el barrido necesita al menos un encoder que se codifique rápido:
+        # con él, probar cuatro tamaños de chunk cuesta lo que uno de los grandes.
+        "modelo": "intfloat/multilingual-e5-base",
+        "dim": 768,
+        "max_tokens": 512,
+        "prefijo_consulta": "query: ",
+        "prefijo_pasaje": "passage: ",
+        "pooling": "mean",
+    },
+    "me5-small": {
+        # El más barato del catálogo. Sirve para barrer la rejilla de chunking en
+        # minutos y quedarse solo con los tamaños prometedores para los grandes.
+        "modelo": "intfloat/multilingual-e5-small",
+        "dim": 384,
+        "max_tokens": 512,
+        "prefijo_consulta": "query: ",
+        "prefijo_pasaje": "passage: ",
+        "pooling": "mean",
+    },
+    "me5-large-instruct": {
+        # Mismo backbone que me5-large (XLM-RoBERTa large) afinado con
+        # instrucciones. El prefijo de consulta lleva la tarea descrita en
+        # lenguaje natural, y los pasajes van sin prefijo — al revés que la
+        # familia e5 clásica. Interesa porque la asimetría instruida suele ayudar
+        # justo en lo que aquí falla: consultas largas en español contra pasajes
+        # en inglés.
+        "modelo": "intfloat/multilingual-e5-large-instruct",
+        "dim": 1024,
+        "max_tokens": 512,
+        "prefijo_consulta": (
+            "Instruct: Given a question in Spanish, retrieve passages in any "
+            "language that answer it\nQuery: "
+        ),
+        "prefijo_pasaje": "",
+        "pooling": "mean",
+    },
+    "gte-multilingual-base": {
+        # Familia distinta de las dos anteriores (no es un XLM-R afinado por
+        # intfloat ni por BAAI), con ventana larga y solo 768 dimensiones. Es el
+        # candidato con más probabilidad de aportar algo *nuevo* a la fusión:
+        # cuanto menos se parezca su espacio al de BGE-M3, más consenso
+        # informativo puede añadir el RRF.
+        "modelo": "Alibaba-NLP/gte-multilingual-base",
+        "dim": 768,
+        "max_tokens": 8192,
+        "prefijo_consulta": "",
+        "prefijo_pasaje": "",
+        "pooling": "cls",
+        # Su implementación vive en el repositorio del modelo, no en
+        # transformers, así que hay que autorizarla explícitamente.
+        "trust_remote_code": True,
+    },
+    "labse": {
+        # **Control, no candidato.** El informe afirma que LaBSE no sirve aquí
+        # porque se entrenó para alinear pares de frases paralelas y carece de
+        # noción de relevancia temática asimétrica. Esa afirmación está tomada de
+        # la literatura y nunca se midió sobre este corpus. Incluirlo en el
+        # barrido la convierte en un número: si LaBSE queda último por mucho, la
+        # justificación del informe queda respaldada con datos propios.
+        "modelo": "sentence-transformers/LaBSE",
+        "dim": 768,
+        "max_tokens": 256,
+        "prefijo_consulta": "",
+        "prefijo_pasaje": "",
+        "pooling": "cls",
+    },
 }
+
+# Los que se indexan cuando nadie pide otra cosa. El resto del catálogo existe
+# para el barrido y no entra en la entrega salvo que el barrido lo justifique.
+ENCODERS_ENTREGA = ("bge-m3", "me5-large")
 
 ENCODER_PRINCIPAL = "bge-m3"
 
@@ -150,6 +275,19 @@ RANGOS_FENOMENO = {1: (1, 16), 2: (17, 32), 3: (33, 50)}
 # --- Extracción -----------------------------------------------------------
 
 UMBRAL_PDF_SIN_TEXTO = 200  # caracteres; por debajo se considera escaneado
+
+
+def cabe_en_ventana(chunk: int, encoder: str) -> bool:
+    """¿Un fragmento de `chunk` tokens entra completo en ese encoder?
+
+    Codificar un fragmento más largo que la ventana del modelo no falla: el
+    tokenizador lo trunca y devuelve un vector que no representa la cola. Es el
+    peor fallo posible en un barrido, porque produce números plausibles para una
+    configuración que nadie está midiendo. Se comprueba contra `max_tokens` más
+    la reserva de tokens especiales y prefijo, que es lo que gasta el encoder
+    por encima del contenido.
+    """
+    return chunk + RESERVA_TOKENS_ENCODER <= ENCODERS[encoder]["max_tokens"]
 
 
 def fenomeno_de_consulta(query_id: str) -> int | None:
