@@ -114,6 +114,31 @@ def evaluar_corrida(
     }
 
 
+def comparar_pareado(resumen: dict, base: dict) -> dict[str, tuple[float, float]]:
+    """métrica -> (diferencia media, p-valor) de `resumen` frente a `base`.
+
+    Pareado consulta a consulta, que es lo único que distingue una ventaja
+    pequeña y constante de una grande sostenida por dos consultas. Entre dos
+    corridas de la misma familia casi todas las consultas dan lo mismo y solo
+    unas pocas se mueven: el bootstrap no pareado mide la varianza de las
+    cincuenta, y el pareado solo la de las que cambian.
+
+    Se parean únicamente las consultas que las dos corridas tienen. Si no
+    comparten ninguna no son comparables y se devuelve `{}` en vez de un número
+    que aparentaría medir algo.
+    """
+    comunes = sorted(set(resumen["por_consulta"]) & set(base["por_consulta"]))
+    if not comunes:
+        return {}
+    return {
+        metrica: metricas.p_valor_permutacion(
+            [resumen["por_consulta"][q][metrica] for q in comunes],
+            [base["por_consulta"][q][metrica] for q in comunes],
+        )
+        for metrica in ("ndcg@10", "f1@3")
+    }
+
+
 def puntos_borda(resumenes: list[dict]) -> list[int]:
     """Conteo de Borda sobre las dos métricas, como en la §11.2 del reto."""
     n = len(resumenes)
@@ -231,6 +256,28 @@ def main() -> int:
         print(f"{etiquetas[i]:<{ancho}} {r['ndcg@10']:>9.4f} {ic_n:>18} "
               f"{r['f1@3']:>8.4f} {ic_f:>18} {puntos[i]:>6} "
               f"{r['consultas_evaluadas']:>4}")
+
+    # La primera corrida de la línea de comandos es la referencia: se compara
+    # contra lo que ya se entrega, que es la única comparación que decide algo.
+    if len(resumenes) > 1:
+        referencia = 0
+        print(f"\n{'corrida':<{ancho}} frente a {etiquetas[referencia]} "
+              "(pareado, consulta a consulta)")
+        for i in orden:
+            if i == referencia:
+                continue
+            difs = comparar_pareado(resumenes[i], resumenes[referencia])
+            if not difs:
+                print(f"{etiquetas[i]:<{ancho}} sin consultas en común")
+                continue
+            dn, pn = difs["ndcg@10"]
+            df, pf = difs["f1@3"]
+            print(f"{etiquetas[i]:<{ancho}} NDCG {dn:+.4f} (p={pn:.4f})   "
+                  f"F1 {df:+.4f} (p={pf:.4f})")
+        comparaciones = 2 * (len(resumenes) - 1)
+        if comparaciones > 2:
+            print(f"  {comparaciones} comparaciones: umbral corregido "
+                  f"{0.05 / comparaciones:.4f}, no 0.05.")
 
     print(f"\n{'corrida':<{ancho}} {'fenómeno':>10} {'NDCG@10':>9} {'F1@3':>8} {'q':>4}")
     for i in orden:
