@@ -141,7 +141,7 @@ PRESETS: dict[str, dict] = {
     # ¿Cómo se combinan dos espacios vectoriales? Es la pregunta que el diseño
     # dejó abierta: RRF frente a CombSUM frente a la convexa normalizada.
     "fusion": {
-        "fusiones": ["rrf", "combsum", "convexa"],
+        "fusiones": ["rrf", "combsum", "combmnz", "convexa"],
         "k0": [10, 20, 60],
         "boosts": [1.0],
         "agregaciones": ["max"],
@@ -155,7 +155,7 @@ PRESETS: dict[str, dict] = {
     },
     # Todo lo barato, con el chunking y los encoders fijos.
     "politicas": {
-        "fusiones": ["rrf", "combsum", "convexa"],
+        "fusiones": ["rrf", "combsum", "combmnz", "convexa"],
         "k0": [10, 20, 60],
         "boosts": [1.0, 1.05, 1.15],
         "max_por_doc": [2, 3, 5],
@@ -175,7 +175,7 @@ PRESETS: dict[str, dict] = {
         "encoders": sorted(config.ENCODERS),
         "chunks": [256, 504, 768],
         "solapes": [0.0, 0.15],
-        "fusiones": ["rrf", "combsum", "convexa"],
+        "fusiones": ["rrf", "combsum", "combmnz", "convexa"],
         "agregaciones": ["max", "top2", "top3"],
     },
 }
@@ -725,7 +725,7 @@ def main() -> int:
     ap.add_argument("--encoders", help="lista separada por comas")
     ap.add_argument("--chunks", help="tokens por fragmento, separados por comas")
     ap.add_argument("--solapes", help="fracciones de solape, separadas por comas")
-    ap.add_argument("--fusiones", help="rrf, combsum, convexa")
+    ap.add_argument("--fusiones", help="rrf, combsum, combmnz, convexa")
     ap.add_argument("--k0", help="valores de k0 para RRF")
     ap.add_argument("--boosts", help="multiplicadores de realce por fenómeno")
     ap.add_argument("--max-por-doc", help="topes de fragmentos por documento")

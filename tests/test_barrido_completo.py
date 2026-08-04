@@ -438,3 +438,91 @@ class TestSignificanciaEnElInforme:
         mod.informar([a, b], top=10, carpeta=tmp_path)
         resumen = (tmp_path / "resumen.txt").read_text(encoding="utf-8")
         assert "p(NDCG" not in resumen
+
+
+class TestFusionCombMNZ:
+    """CombMNZ es una de las tres fusiones que la §8.4 nombra y era la que
+    faltaba. Frente a CombSUM añade un factor: el número de índices en los que
+    el fragmento aparece, que premia el consenso entre encoders sobre la
+    puntuación alta en uno solo.
+    """
+
+    def test_un_solo_indice_no_cambia_el_orden(self):
+        from aphelion.busqueda.recuperacion import fusionar_combmnz
+
+        rankings = {"a": [(meta("c1"), 0.9), (meta("c2"), 0.4)]}
+        assert [c.chunk_id for c in fusionar_combmnz(rankings)] == ["c1", "c2"]
+
+    def test_el_consenso_multiplica_la_suma(self):
+        from aphelion.busqueda.recuperacion import fusionar_combmnz
+
+        # c1 aparece en los dos índices, c2 solo en uno con mejor puntuación.
+        rankings = {
+            "a": [(meta("c2"), 0.90), (meta("c1"), 0.30)],
+            "b": [(meta("c1"), 0.25)],
+        }
+        puntajes = {c.chunk_id: c.puntaje for c in fusionar_combmnz(rankings)}
+        assert puntajes["c1"] == pytest.approx((0.30 + 0.25) * 2)
+        assert puntajes["c2"] == pytest.approx(0.90 * 1)
+
+    def test_el_consenso_puede_adelantar_a_una_puntuacion_mas_alta(self):
+        """Es la diferencia con CombSUM y la razón de que exista."""
+        from aphelion.busqueda.recuperacion import fusionar_combmnz, fusionar_combsum
+
+        rankings = {
+            "a": [(meta("c2"), 0.90), (meta("c1"), 0.30)],
+            "b": [(meta("c1"), 0.25)],
+        }
+        assert [c.chunk_id for c in fusionar_combsum(rankings)] == ["c2", "c1"]
+        assert [c.chunk_id for c in fusionar_combmnz(rankings)] == ["c1", "c2"]
+
+    def test_registra_las_posiciones_como_las_otras_fusiones(self):
+        from aphelion.busqueda.recuperacion import fusionar_combmnz
+
+        rankings = {"a": [(meta("c1"), 0.9)], "b": [(meta("c1"), 0.8)]}
+        assert fusionar_combmnz(rankings)[0].posiciones == {"a": 1, "b": 1}
+
+    def test_propaga_el_idioma(self):
+        from aphelion.busqueda.recuperacion import fusionar_combmnz
+
+        assert fusionar_combmnz({"a": [(meta("c1"), 0.9)]})[0].idioma == "es"
+
+    def test_ranking_vacio_se_ignora(self):
+        from aphelion.busqueda.recuperacion import fusionar_combmnz
+
+        rankings = {"a": [(meta("c1"), 0.9)], "b": []}
+        assert [c.chunk_id for c in fusionar_combmnz(rankings)] == ["c1"]
+
+    def test_ordenar_acepta_combmnz_como_fusion(self):
+        from aphelion.busqueda.recuperacion import fusionar_combmnz, fusionar_combsum
+
+        rankings = {
+            "a": [(meta("c2", "D2"), 0.90), (meta("c1", "D1"), 0.30)],
+            "b": [(meta("c1", "D1"), 0.25)],
+        }
+        # Si `ordenar` no conociera 'combmnz' caería en RRF por el else final y
+        # el resultado no se distinguiría del de otra fusión cualquiera.
+        esperado = [c.chunk_id for c in fusionar_combmnz(rankings)]
+        distinto = [c.chunk_id for c in fusionar_combsum(rankings)]
+        assert esperado != distinto  # el caso de prueba discrimina
+
+        rec = _recuperador_de_prueba()
+        obtenido = rec.ordenar(rankings, _consulta(), fusion="combmnz")
+        assert [c.chunk_id for c in obtenido.fragmentos] == esperado
+
+
+def _consulta():
+    from aphelion.busqueda.consultas import Consulta
+
+    return Consulta(query_id="q001", texto="da igual")
+
+
+def _recuperador_de_prueba():
+    from aphelion.busqueda.recuperacion import Recuperador
+    from aphelion.indice import vectores as mod_vec
+    import numpy as np
+
+    indice = mod_vec.IndiceVectorial(
+        "a", mod_vec.construir(np.eye(2, dtype=np.float32), 2),
+        [meta("c1"), meta("c2")])
+    return Recuperador({"a": indice})

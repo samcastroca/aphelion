@@ -137,6 +137,18 @@ def fusionar_combsum(
 
     Un fragmento ausente del top-k de un índice suma cero por ese índice.
     """
+    acumulado = _acumular_por_similitud(rankings)
+    return sorted(acumulado.values(), key=lambda c: c.puntaje, reverse=True)
+
+
+def _acumular_por_similitud(
+    rankings: dict[str, list[tuple[dict, float]]],
+) -> dict[str, Candidato]:
+    """chunk_id -> candidato con la suma de sus similitudes y sus posiciones.
+
+    Es el paso común de CombSUM y CombMNZ; lo único que las distingue es qué se
+    hace después con esa suma.
+    """
     acumulado: dict[str, Candidato] = {}
 
     for encoder, ranking in rankings.items():
@@ -158,6 +170,28 @@ def fusionar_combsum(
             candidato.puntaje += similitud
             candidato.posiciones[encoder] = posicion
 
+    return acumulado
+
+
+def fusionar_combmnz(
+    rankings: dict[str, list[tuple[dict, float]]],
+) -> list[Candidato]:
+    """CombSUM multiplicado por el número de índices donde el fragmento aparece.
+
+    Es la tercera fusión que nombra la §8.4 y la que faltaba. Frente a CombSUM
+    añade el factor de consenso: un fragmento que los dos encoders traen, aunque
+    sea con similitud mediana, adelanta a uno que solo uno de ellos puntúa muy
+    alto. La apuesta es que coincidir en dos espacios vectoriales distintos es
+    mejor señal de relevancia que destacar en uno, que es exactamente lo que
+    justifica tener dos encoders.
+
+    Hereda de CombSUM la sensibilidad a la escala: suma cosenos crudos, así que
+    solo es comparable entre encoders cuyos rangos de similitud se parezcan. Con
+    escalas dispares, `fusionar_convexa` normaliza antes de sumar.
+    """
+    acumulado = _acumular_por_similitud(rankings)
+    for candidato in acumulado.values():
+        candidato.puntaje *= candidato.consenso
     return sorted(acumulado.values(), key=lambda c: c.puntaje, reverse=True)
 
 
@@ -470,6 +504,8 @@ class Recuperador:
             }
         if fusion == "combsum":
             candidatos = fusionar_combsum(rankings)
+        elif fusion == "combmnz":
+            candidatos = fusionar_combmnz(rankings)
         elif fusion == "convexa":
             candidatos = fusionar_convexa(rankings)
         else:
