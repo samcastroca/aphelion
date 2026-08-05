@@ -22,6 +22,14 @@ entrega/*
 !entrega/generador.py
 !entrega/resultados.jsonl
 
+# La segunda entrega, por la misma regla: su base vectorial pesa 787 MB porque
+# necesita los dos encoders —BGE-M3 decide los fragmentos y los dos deciden los
+# documentos—, y eso no cabe en GitHub. Se versionan el generador, que es código
+# fuente, y los resultados, que son el entregable evaluado.
+entrega-v2/*
+!entrega-v2/generador.py
+!entrega-v2/resultados.jsonl
+
 # Experimentación. Los fragmentos (68 MB) y los índices (117 MB por encoder y
 # chunking) se regeneran desde data/submuestra.json, que sí se versiona; lo que
 # merece la pena guardar de cada experimento son sus métricas, que son kilobytes.
