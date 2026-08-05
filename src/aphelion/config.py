@@ -60,22 +60,46 @@ PRUEBAS_FRAGMENTOS = PRUEBAS / "fragmentos"
 PRUEBAS_INDICES = PRUEBAS / "indices"
 
 
-def clave_chunking(chunk: int, solape: float) -> str:
-    """(504, 0.15) -> 'c504-s015'.
+# Cómo se decide dónde empieza y acaba un fragmento. `fijo` acumula oraciones
+# hasta agotar el presupuesto de tokens; `jerarquico` toma como unidad la sección
+# que declara el documento y solo subdivide las que no caben.
+ESTRATEGIA_FIJA = "fijo"
+ESTRATEGIA_JERARQUICA = "jerarquico"
+ESTRATEGIAS_CHUNKING = (ESTRATEGIA_FIJA, ESTRATEGIA_JERARQUICA)
+
+
+def clave_chunking(
+    chunk: int, solape: float, estrategia: str = ESTRATEGIA_FIJA
+) -> str:
+    """(504, 0.15) -> 'c504-s015'; con estrategia -> 'c504-s015-jerarquico'.
 
     Identifica qué fragmentación produjo unos artefactos. Vive aquí y no en el
     barrido porque la usan tanto quien escribe los índices como quien decide si
     ya existen, y dos versiones de esta cadena harían que la caché no acertara.
+
+    La estrategia entra en la clave porque dos fragmentaciones del mismo tamaño
+    y solape producen fragmentos **distintos** si una parte por secciones. Sin
+    esto, pedir la jerárquica a 504/0,15 encontraría cacheados los fragmentos
+    fijos y los daría por buenos: números plausibles de una configuración que
+    nadie corrió, que es el peor fallo que puede tener un barrido.
+
+    `fijo` no lleva sufijo a propósito: es lo que ya está escrito en disco y
+    renombrarlo invalidaría todos los índices de `pruebas/` sin ganar nada.
     """
-    return f"c{chunk}-s{int(round(solape * 100)):03d}"
+    base = f"c{chunk}-s{int(round(solape * 100)):03d}"
+    return base if estrategia == ESTRATEGIA_FIJA else f"{base}-{estrategia}"
 
 
-def ruta_fragmentos_prueba(chunk: int, solape: float) -> Path:
-    return PRUEBAS_FRAGMENTOS / f"{clave_chunking(chunk, solape)}.jsonl"
+def ruta_fragmentos_prueba(
+    chunk: int, solape: float, estrategia: str = ESTRATEGIA_FIJA
+) -> Path:
+    return PRUEBAS_FRAGMENTOS / f"{clave_chunking(chunk, solape, estrategia)}.jsonl"
 
 
-def ruta_indices_prueba(chunk: int, solape: float) -> Path:
-    return PRUEBAS_INDICES / clave_chunking(chunk, solape)
+def ruta_indices_prueba(
+    chunk: int, solape: float, estrategia: str = ESTRATEGIA_FIJA
+) -> Path:
+    return PRUEBAS_INDICES / clave_chunking(chunk, solape, estrategia)
 
 # Entregable
 ENTREGA = RAIZ / "entrega"
@@ -221,6 +245,31 @@ CHUNK_PRESUPUESTO = CHUNK_TOKENS - RESERVA_TOKENS_ENCODER
 CHUNK_SOLAPE = 0.15
 MIN_TOKENS_FRAGMENTO = 10  # por debajo son restos de tabla, no contenido
 MAX_PALABRAS_FRAGMENTO = 250  # límite que impone el reto
+
+# --- Chunking jerárquico --------------------------------------------------
+# La estrategia `jerarquico` toma la sección del documento como unidad en vez
+# del presupuesto de tokens. Estos tres umbrales deciden qué hacer con cada una.
+#
+# Una sección por debajo de MIN se entrega entera aunque sobre presupuesto: la
+# apuesta de esta estrategia es que una sección corta y completa recupera mejor
+# que media sección de tamaño óptimo. Por encima de MAX se subdivide con el
+# mismo `agrupar` de la estrategia fija, así que sigue sin partir una oración.
+# Entre las dos se deja entera, que es lo que significa respetar la estructura.
+SECCION_MIN_TOKENS = 450
+SECCION_MAX_TOKENS = 650
+
+# Por debajo de esto una sección no se sostiene sola —suele ser el encabezado
+# suelto, o el pie de una sección que empieza en la página siguiente— y se
+# acumula con la que sigue. Sin esta regla, un documento con cuarenta epígrafes
+# cortos mete cuarenta fragmentos de dos líneas en el índice, y cada uno compite
+# por una de las diez posiciones que evalúa NDCG@10.
+SECCION_MIN_AUTONOMA = 60
+
+# Un fragmento jerárquico llega hasta SECCION_MAX_TOKENS, por encima del
+# presupuesto de la estrategia fija. Es inocuo con encoders de ventana larga
+# (BGE-M3 tiene 8192) y trunca en silencio con los de 512, así que las recetas
+# que pidan esta estrategia se comprueban contra este techo y no contra `chunk`.
+
 
 # Un fragmento largo se puede dividir en sub-fragmentos, cada uno ocupando su
 # propia posición. El argumento a favor era que truncar descarta evidencia: el 76,5%

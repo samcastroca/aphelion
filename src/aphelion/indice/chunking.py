@@ -18,6 +18,7 @@ import pysbd
 from tokenizers import Tokenizer
 
 from .. import config
+from . import estructura
 
 # pysbd trae reglas por idioma; para el resto se usa el segmentador inglés, que
 # es el más conservador ante abreviaturas desconocidas.
@@ -287,6 +288,186 @@ def _verificar_presupuesto(
             verificados.append((trozo, _contar(tokenizador, trozo)))
 
     return verificados
+
+
+def _alinear_a_oraciones(secciones: list, idioma: str) -> list:
+    """Mueve las fronteras de sección al final de la oración más cercana.
+
+    **Por qué no basta con detectar bien los encabezados.** La frontera entre dos
+    secciones es una línea del PDF, y una línea puede caer a mitad de una frase:
+    basta con que la heurística tome por epígrafe algo que era texto corrido en
+    negrita. Entonces la oración queda partida entre dos fragmentos, que es
+    exactamente lo que prohíbe la §3.3 — y la prohíbe con razón, porque media
+    frase no responde una consulta ni en un lado ni en el otro.
+
+    Detectar mejor reduce el caso; no lo elimina. Esto sí: cuando el texto de una
+    sección no cierra frase, su última oración incompleta se antepone a la
+    sección siguiente, que es donde continúa. Con un encabezado de verdad la
+    sección anterior ya cerraba y no se mueve nada.
+    """
+    from dataclasses import replace
+
+    alineadas = list(secciones)
+    for i in range(len(alineadas) - 1):
+        texto = alineadas[i].texto.rstrip()
+        if not texto or texto.endswith(estructura.FIN_LIMPIO):
+            continue
+
+        oraciones = dividir_en_oraciones(texto, idioma)
+        if not oraciones:
+            continue
+
+        cola = oraciones[-1]
+        cabeza = " ".join(oraciones[:-1]).strip()
+        siguiente = alineadas[i + 1]
+        alineadas[i] = replace(alineadas[i], texto=cabeza)
+        # Con espacio y no con salto de párrafo: la cola y lo que sigue son la
+        # misma oración partida por la maquetación. Separarlas por "\n\n" haría
+        # que `dividir_en_oraciones` las volviera a tratar como dos, y el corte
+        # reaparecería en el fragmento siguiente.
+        alineadas[i + 1] = replace(
+            siguiente, texto=f"{cola} {siguiente.texto}".strip()
+        )
+
+    return [s for s in alineadas if s.texto.strip()]
+
+
+def _agrupar_secciones(
+    secciones: list, tokenizador: Tokenizer
+) -> list[tuple[str | None, str, int]]:
+    """Fusiona las secciones que no se sostienen solas. (titulo, texto, tokens).
+
+    Un encabezado suelto, o el pie de una sección que continúa en la página
+    siguiente, mide dos líneas. Emitirlo como fragmento propio gasta una de las
+    diez posiciones que evalúa NDCG@10 para informar de casi nada, y un documento
+    con cuarenta epígrafes cortos gastaría cuarenta.
+
+    Se acumulan hacia adelante y conservan el título del primero, que es el que
+    nombra el tramo. El último puede quedar corto si no le sigue nadie: entonces
+    se fusiona hacia atrás, con el anterior.
+    """
+    piezas: list[tuple[str | None, str, int]] = []
+    titulo_pendiente: str | None = None
+    texto_pendiente: list[str] = []
+    tokens_pendientes = 0
+
+    for seccion in secciones:
+        n = _contar(tokenizador, seccion.texto)
+        if not texto_pendiente:
+            titulo_pendiente = seccion.titulo
+        texto_pendiente.append(seccion.texto)
+        tokens_pendientes += n
+
+        if tokens_pendientes >= config.SECCION_MIN_AUTONOMA:
+            piezas.append(
+                (titulo_pendiente, "\n\n".join(texto_pendiente), tokens_pendientes)
+            )
+            titulo_pendiente, texto_pendiente, tokens_pendientes = None, [], 0
+
+    if texto_pendiente:
+        cola = "\n\n".join(texto_pendiente)
+        if piezas:
+            titulo, previo, tokens = piezas[-1]
+            piezas[-1] = (titulo, f"{previo}\n\n{cola}", tokens + tokens_pendientes)
+        else:
+            piezas.append((titulo_pendiente, cola, tokens_pendientes))
+
+    return piezas
+
+
+def fragmentar_jerarquico(
+    doc: dict,
+    texto: str,
+    idioma: str,
+    secciones: list | None,
+    nombre_encoder: str = config.ENCODER_PRINCIPAL,
+    max_tokens: int = config.CHUNK_PRESUPUESTO,
+    solape: float = config.CHUNK_SOLAPE,
+    basura: set[str] | None = None,
+) -> list[Fragmento]:
+    """Fragmenta tomando la sección como unidad, no el presupuesto de tokens.
+
+    La apuesta es que una sección es una unidad de significado que su autor ya
+    delimitó, y que un fragmento que la respeta responde mejor que uno que corta
+    donde se acaban los 504 tokens. Lo que se juega en contra es el tamaño: las
+    secciones cortas desaprovechan el vector y las largas hay que partirlas
+    igual, con lo que en esos casos se vuelve a la estrategia fija.
+
+    `secciones=None` significa que el documento no declara estructura utilizable
+    —JSON, CSV, un PDF escaneado, uno ilegible— y entonces esto **es** la
+    estrategia fija: se delega en `fragmentar` sin cambiar nada. Eso es lo que
+    hace que la estrategia se pueda medir sobre el corpus entero sin dejar
+    documentos fuera.
+
+    Tres tramos, por tamaño de sección:
+
+    - por debajo de `SECCION_MIN_TOKENS`, entera aunque sobre presupuesto;
+    - entre ese umbral y `SECCION_MAX_TOKENS`, entera también: respetar la
+      estructura es exactamente esto;
+    - por encima, se subdivide con `agrupar`, que no parte oraciones y arrastra
+      el mismo solape que la estrategia fija.
+    """
+    if not secciones:
+        return fragmentar(doc, texto, idioma, nombre_encoder, max_tokens, solape)
+
+    formato = doc.get("formato") or doc["fuente"].rsplit(".", 1)[-1].lower()
+    tokenizador = _tokenizador(nombre_encoder)
+
+    # Las secciones traen el texto crudo del PDF; hay que pasarles la misma
+    # limpieza que recibió el texto de la estrategia fija o la comparación
+    # mediría el preprocesado en vez de la fragmentación.
+    from ..ingesta import limpieza
+
+    from dataclasses import replace
+
+    limpias = []
+    for seccion in secciones:
+        limpio = limpieza.limpiar_seccion(seccion.texto, basura or set())
+        if limpio:
+            limpias.append(replace(seccion, texto=limpio))
+
+    if not limpias:
+        return fragmentar(doc, texto, idioma, nombre_encoder, max_tokens, solape)
+
+    # La frontera de sección la puso una línea del PDF y puede caer a mitad de
+    # frase; esto la mueve al final de la oración antes de medir nada.
+    limpias = _alinear_a_oraciones(limpias, idioma)
+
+    grupos: list[tuple[str, int, str | None]] = []
+    for titulo, texto_seccion, tokens in _agrupar_secciones(limpias, tokenizador):
+        if tokens <= config.SECCION_MAX_TOKENS:
+            grupos.append((texto_seccion, tokens, titulo))
+            continue
+
+        # Demasiado larga para entregarla entera: se parte con el presupuesto
+        # normal. Cada pieza hereda el título, que es lo que dice de qué trata.
+        oraciones = dividir_en_oraciones(texto_seccion, idioma)
+        for trozo, n in agrupar(
+            oraciones, tokenizador, max_tokens=max_tokens, solape=solape
+        ):
+            grupos.append((trozo, n, titulo))
+
+    grupos = [g for g in grupos if g[1] >= config.MIN_TOKENS_FRAGMENTO]
+
+    return [
+        Fragmento(
+            doc_id=doc["doc_id"],
+            chunk_id=f"{doc['doc_id']}-chunk-{i:04d}",
+            fuente=doc["fuente"],
+            formato=formato,
+            fenomeno=doc["fenomeno"],
+            posicion=i,
+            num_tokens=n,
+            texto=t,
+            idioma=idioma,
+            observatorio=doc.get("observatorio", ""),
+            ruta=doc.get("ruta_rel", ""),
+            # El título de la sección, no el del documento: es más específico y
+            # el campo ya existía en el esquema.
+            titulo=titulo or (doc.get("meta") or {}).get("titulo"),
+        )
+        for i, (t, n, titulo) in enumerate(grupos)
+    ]
 
 
 def fragmentar(

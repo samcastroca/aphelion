@@ -48,27 +48,55 @@ def normalizar(texto: str) -> str:
     return _SALTOS.sub("\n\n", texto).strip()
 
 
+def lineas_boilerplate(
+    texto: str, min_repeticiones: int = 4, max_long: int = 90
+) -> set[str]:
+    """Qué líneas descartaría `quitar_boilerplate`, sin descartarlas todavía.
+
+    Está separado porque la decisión es **del documento entero** —una cabecera se
+    reconoce por repetirse entre páginas— pero se aplica por tramos cuando se
+    fragmenta por secciones. Calculando el conjunto una vez y filtrando después,
+    las dos estrategias de chunking reciben exactamente el mismo texto limpio, y
+    lo que las separa es dónde cortan y no qué preprocesado les tocó.
+    """
+    lineas = texto.split("\n")
+    if len(lineas) < min_repeticiones * 2:
+        return set()
+
+    frecuencias = Counter(l.strip() for l in lineas if l.strip())
+    return {
+        linea
+        for linea, n in frecuencias.items()
+        if n >= min_repeticiones and len(linea) <= max_long
+    }
+
+
 def quitar_boilerplate(texto: str, min_repeticiones: int = 4, max_long: int = 90) -> str:
     """Elimina líneas cortas que se repiten muchas veces en el mismo documento.
 
     `min_repeticiones` evita borrar frases legítimamente repetidas dos o tres
     veces; `max_long` evita borrar párrafos completos.
     """
-    lineas = texto.split("\n")
-    if len(lineas) < min_repeticiones * 2:
-        return texto
-
-    frecuencias = Counter(l.strip() for l in lineas if l.strip())
-    basura = {
-        linea
-        for linea, n in frecuencias.items()
-        if n >= min_repeticiones and len(linea) <= max_long
-    }
+    basura = lineas_boilerplate(texto, min_repeticiones, max_long)
     if not basura:
         return texto
 
-    limpias = [l for l in lineas if l.strip() not in basura]
+    limpias = [l for l in texto.split("\n") if l.strip() not in basura]
     return _SALTOS.sub("\n\n", "\n".join(limpias)).strip()
+
+
+def limpiar_seccion(texto: str, basura: set[str]) -> str:
+    """La limpieza de `limpiar`, con el boilerplate ya decidido fuera.
+
+    Mismo orden de operaciones que el pipeline completo; lo único que cambia es
+    que el conjunto de líneas repetidas viene dado, porque una sección suelta no
+    tiene repeticiones suficientes para reconocerlo por su cuenta.
+    """
+    texto = normalizar(texto)
+    if basura:
+        texto = "\n".join(l for l in texto.split("\n") if l.strip() not in basura)
+    texto = quitar_numeracion(texto)
+    return _SALTOS.sub("\n\n", texto).strip()
 
 
 def quitar_numeracion(texto: str) -> str:

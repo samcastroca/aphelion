@@ -244,6 +244,111 @@ def p_valor_permutacion(
     return observada, (extremas + 1) / (n + 1)
 
 
+def _distribucion_rangos(n: int) -> list[int]:
+    """Cuántas asignaciones de signo dan cada suma de rangos, para n diferencias.
+
+    Es la distribución nula exacta de W: cada rango 1..n puede caer del lado
+    positivo o del negativo, así que el número de formas de llegar a la suma s se
+    construye rango a rango. Con n=50 son 1.275 sumas posibles y 63.750
+    operaciones: exacto y barato, sin tener que enumerar 2^50 asignaciones.
+    """
+    formas = [0] * (n * (n + 1) // 2 + 1)
+    formas[0] = 1
+    for rango in range(1, n + 1):
+        for s in range(len(formas) - 1, rango - 1, -1):
+            formas[s] += formas[s - rango]
+    return formas
+
+
+def p_valor_wilcoxon(a: list[float], b: list[float]) -> tuple[float, float]:
+    """Wilcoxon de rangos con signo, pareado. Devuelve (mediana de las difs, p).
+
+    La alternativa no paramétrica al test de permutación de arriba, sobre los
+    mismos datos: la misma métrica de las mismas consultas en el mismo orden.
+    Donde la permutación trabaja con la magnitud de las diferencias, esta las
+    reduce a su **rango**, de modo que una consulta que mejora muchísimo no pesa
+    más que la que mejora un poco. Eso la hace más robusta a un par de consultas
+    atípicas y menos sensible cuando la ventaja es real pero concentrada.
+
+    Se implementa aquí y no se toma de scipy a propósito: scipy entra en el
+    entorno como dependencia transitiva de sentence-transformers, no está
+    declarado en `pyproject.toml`, y apoyar una conclusión del informe en un
+    paquete que nadie pidió es la clase de dependencia que desaparece en la
+    siguiente resolución del lock.
+
+    Las diferencias nulas se descartan, que es el procedimiento original de
+    Wilcoxon: una consulta donde las dos configuraciones empatan no aporta
+    evidencia en ninguna dirección. Si empatan todas, no hay nada que decidir y
+    el p-valor es 1.
+
+    Con empates entre magnitudes se usan rangos promediados y la aproximación
+    normal con corrección de continuidad y de empates, porque la distribución
+    exacta deja de valer en cuanto los rangos no son enteros. Sin empates se usa
+    la distribución exacta, que con cincuenta consultas es inmediata.
+    """
+    if len(a) != len(b):
+        raise ValueError(
+            f"se comparan {len(a)} consultas contra {len(b)}: el test es pareado "
+            "y exige las mismas consultas en el mismo orden"
+        )
+    if not a:
+        raise ValueError("sin consultas no hay nada que comparar")
+
+    difs = [x - y for x, y in zip(a, b)]
+    ordenadas = sorted(difs)
+    mitad = len(ordenadas) // 2
+    mediana = (
+        ordenadas[mitad]
+        if len(ordenadas) % 2
+        else (ordenadas[mitad - 1] + ordenadas[mitad]) / 2
+    )
+
+    no_nulas = [d for d in difs if d != 0]
+    n = len(no_nulas)
+    if n == 0:
+        return 0.0, 1.0
+
+    # Rangos de |d|, promediados dentro de cada grupo de empates.
+    por_magnitud = sorted(range(n), key=lambda i: abs(no_nulas[i]))
+    rangos = [0.0] * n
+    i = 0
+    empates: list[int] = []
+    while i < n:
+        j = i
+        while j + 1 < n and abs(no_nulas[por_magnitud[j + 1]]) == abs(
+            no_nulas[por_magnitud[i]]
+        ):
+            j += 1
+        promedio = (i + j) / 2 + 1  # rangos base 1
+        for k in range(i, j + 1):
+            rangos[por_magnitud[k]] = promedio
+        if j > i:
+            empates.append(j - i + 1)
+        i = j + 1
+
+    w_mas = sum(r for r, d in zip(rangos, no_nulas) if d > 0)
+    w_menos = sum(r for r, d in zip(rangos, no_nulas) if d < 0)
+    w = min(w_mas, w_menos)
+
+    if not empates:
+        formas = _distribucion_rangos(n)
+        total = float(2**n)
+        # Bilateral: la cola por debajo de W, contada a los dos lados.
+        cola = sum(formas[: int(w) + 1])
+        return mediana, min(1.0, 2.0 * cola / total)
+
+    media = n * (n + 1) / 4
+    correccion_empates = sum(t**3 - t for t in empates)
+    varianza = (n * (n + 1) * (2 * n + 1) - correccion_empates / 2) / 24
+    if varianza <= 0:
+        return mediana, 1.0
+
+    z = (abs(w - media) - 0.5) / math.sqrt(varianza)
+    # Cola bilateral de la normal estándar, por la función de error.
+    p = math.erfc(z / math.sqrt(2))
+    return mediana, min(1.0, p)
+
+
 def cargar_juicios(ruta: Path) -> dict[str, Juicio]:
     juicios: dict[str, Juicio] = {}
     with ruta.open(encoding="utf-8") as fh:

@@ -1,0 +1,51 @@
+{
+  "nombre": "jerarquico-v1",
+  "preset": null,
+  "recetas": [
+    "entrega",
+    "jerarquico-v1"
+  ],
+  "fecha": "2026-08-04T20:08:14",
+  "corridas": 2,
+  "opciones": {
+    "entrega": {
+      "apuesta": "la línea base: exactamente lo que se entrega hoy",
+      "por_que": "No es una candidata, es la vara de medir. Sin ella una tabla de recetas dice cuál es la mejor entre las nuevas, que es la pregunta equivocada: lo que hay que saber es si alguna le gana a lo que ya está construido. Desde que se midió sobre el corpus completo, la entrega es BGE-M3 solo con agregación top2: le ganaba a los dos encoders con max por +0,1074 de NDCG@10 (p=0,0002, pareado sobre el entregable real) sin ceder nada medible en F1@3.",
+      "encoders": [
+        "bge-m3"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top2",
+      "estrategia": "fijo"
+    },
+    "jerarquico-v1": {
+      "apuesta": "que la sección del documento recupere mejor que 504 tokens",
+      "por_que": "Todo el catálogo hasta aquí discute el tamaño del fragmento —256, 345, 504, 768— dando por sentado que la frontera cae donde se acaba el presupuesto. Esta receta discute la frontera: toma como unidad la sección que el autor ya delimitó y solo subdivide las que no caben. Si la estructura vale, un fragmento que empieza donde empieza un epígrafe y acaba donde acaba debería responder mejor que uno que arranca a mitad de un argumento. Cambia una sola cosa respecto a `entrega` —dónde se corta— para que la diferencia no admita dos lecturas: mismo encoder, mismo solape al subdividir, misma agregación top2 por fuente. Lo que juega en contra: las secciones cortas desaprovechan el vector, y de los 252 PDF de la submuestra hay 18 escaneados que no tienen tipografía que leer y caen a la estrategia fija, así que las consultas q033–q050 apenas pueden moverse.",
+      "encoders": [
+        "bge-m3"
+      ],
+      "chunk": 504,
+      "solape": 0.15,
+      "fusion": "rrf",
+      "k0": 60,
+      "boost": 1.05,
+      "max_por_doc": 3,
+      "candidatos": 200,
+      "umbral": null,
+      "subdividir": false,
+      "agregacion": "top2",
+      "estrategia": "jerarquico"
+    }
+  },
+  "submuestra": "C:\\Users\\samue\\OneDrive\\Desktop\\aphelion\\data\\submuestra.json",
+  "ground_truth": "C:\\Users\\samue\\OneDrive\\Desktop\\aphelion\\data\\ground_truth.jsonl",
+  "umbral_emparejamiento": 0.55
+}

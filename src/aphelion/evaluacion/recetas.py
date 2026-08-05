@@ -47,6 +47,12 @@ class Receta:
     umbral: float | None
     subdividir: bool
     agregacion: str
+    # Cómo se decide la frontera del fragmento. Va con `chunk` y `solape` —son
+    # las tres cosas que obligan a re-fragmentar y recodificar— y no en
+    # `politica()`, que es lo que se puede cambiar reordenando lo ya cacheado.
+    # Con valor por defecto para que las recetas que no la nombran sigan
+    # describiendo exactamente lo que describían.
+    estrategia: str = config.ESTRATEGIA_FIJA
 
     def politica(self) -> dict:
         """Las claves que consume el barrido para una corrida."""
@@ -77,7 +83,15 @@ class Receta:
         # Con un solo índice no hay nada que fusionar y nombrar una fusión ahí
         # haría creer que se está midiendo algo que no interviene.
         fusion = "sin fusión" if self.sola else self.fusion
-        linea = f"{enc:<22} {self.chunk}/{self.solape:.2f}  {fusion:<11} a={self.agregacion:<5}"
+        # La fragmentación jerárquica no se dimensiona por `chunk`: ese número
+        # solo interviene al subdividir las secciones que no caben, así que
+        # enseñarlo como si fuera el tamaño del fragmento engañaría.
+        corte = (
+            f"{self.chunk}/{self.solape:.2f}"
+            if self.estrategia == config.ESTRATEGIA_FIJA
+            else f"secciones({self.chunk})"
+        )
+        linea = f"{enc:<22} {corte:<9}  {fusion:<11} a={self.agregacion:<5}"
 
         extras = []
         if not self.sola and self.fusion == "rrf" and self.k0 != config.RRF_K0:
@@ -100,11 +114,24 @@ class Receta:
 
     def faltantes(self) -> int:
         """Cuántos de sus índices no están todavía en pruebas\\indices."""
-        base = config.ruta_indices_prueba(self.chunk, self.solape)
+        base = config.ruta_indices_prueba(self.chunk, self.solape, self.estrategia)
         return sum(
             0 if (base / f"encoder_{e}" / "index.faiss").exists() else 1
             for e in self.encoders
         )
+
+    @property
+    def techo_tokens(self) -> int:
+        """El fragmento más largo que esta receta puede producir.
+
+        Con la estrategia fija es el presupuesto. Con la jerárquica es el tope de
+        sección, que está deliberadamente por encima: una sección de 600 tokens
+        se entrega entera. Lo que decide si un encoder sirve es este número, no
+        `chunk`.
+        """
+        if self.estrategia == config.ESTRATEGIA_FIJA:
+            return self.chunk
+        return max(self.chunk, config.SECCION_MAX_TOKENS)
 
     def problemas(self) -> list[str]:
         """Lo que haría que esta receta midiera algo distinto de lo que dice."""
@@ -112,10 +139,11 @@ class Receta:
         for encoder in self.encoders:
             if encoder not in config.ENCODERS:
                 fallos.append(f"{encoder} no está en el catálogo")
-            elif not config.cabe_en_ventana(self.chunk, encoder):
+            elif not config.cabe_en_ventana(self.techo_tokens, encoder):
                 ventana = config.ENCODERS[encoder]["max_tokens"]
                 fallos.append(
-                    f"{self.chunk} tokens no caben en {encoder} (ventana {ventana}): "
+                    f"{self.techo_tokens} tokens no caben en {encoder} "
+                    f"(ventana {ventana}): "
                     "se truncaría en silencio"
                 )
         if self.sola and self.fusion != "rrf":
@@ -280,6 +308,27 @@ RECETAS: dict[str, Receta] = {
         chunk=768,
         max_por_doc=5,
         agregacion="top3",
+    ),
+    "jerarquico-v1": _variante(
+        apuesta="que la sección del documento recupere mejor que 504 tokens",
+        por_que=(
+            "Todo el catálogo hasta aquí discute el tamaño del fragmento —256, "
+            "345, 504, 768— dando por sentado que la frontera cae donde se acaba "
+            "el presupuesto. Esta receta discute la frontera: toma como unidad la "
+            "sección que el autor ya delimitó y solo subdivide las que no caben. "
+            "Si la estructura vale, un fragmento que empieza donde empieza un "
+            "epígrafe y acaba donde acaba debería responder mejor que uno que "
+            "arranca a mitad de un argumento. "
+            "Cambia una sola cosa respecto a `entrega` —dónde se corta— para que "
+            "la diferencia no admita dos lecturas: mismo encoder, mismo solape al "
+            "subdividir, misma agregación top2 por fuente. "
+            "Lo que juega en contra: las secciones cortas desaprovechan el vector, "
+            "y de los 252 PDF de la submuestra hay 18 escaneados que no tienen "
+            "tipografía que leer y caen a la estrategia fija, así que las "
+            "consultas q033–q050 apenas pueden moverse."
+        ),
+        encoders=("bge-m3",),
+        estrategia=config.ESTRATEGIA_JERARQUICA,
     ),
 }
 

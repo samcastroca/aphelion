@@ -215,6 +215,9 @@ class Plan:
     solape: float
     cfg: dict
     receta: str | None = None
+    # Va con chunk y solape porque es lo tercero que obliga a re-fragmentar. La
+    # rejilla no la abre: barrer estrategias es caro y se pide por receta.
+    estrategia: str = config.ESTRATEGIA_FIJA
 
 
 # --- Rejilla --------------------------------------------------------------
@@ -277,6 +280,7 @@ def planificar_recetas(nombres: list[str]) -> list[Plan]:
             solape=mod_recetas.RECETAS[n].solape,
             cfg=mod_recetas.RECETAS[n].politica(),
             receta=n,
+            estrategia=mod_recetas.RECETAS[n].estrategia,
         )
         for n in nombres
     ]
@@ -291,10 +295,10 @@ def avisar_de_ventanas(planes: list[Plan]) -> None:
     """
     malos = sorted(
         {
-            (p.chunk, e)
+            (techo(p), e)
             for p in planes
             for e in p.encoders
-            if not config.cabe_en_ventana(p.chunk, e)
+            if not config.cabe_en_ventana(techo(p), e)
         }
     )
     for chunk, encoder in malos:
@@ -315,6 +319,7 @@ class Corrida:
     f1: float
     ic_ndcg: tuple[float, float]
     ic_f1: tuple[float, float]
+    estrategia: str = config.ESTRATEGIA_FIJA
     receta: str | None = None
     # query_id -> {'ndcg@10', 'f1@3'}. Hace falta para comparar dos corridas
     # consulta a consulta; las medias solas no permiten parear.
@@ -325,8 +330,15 @@ class Corrida:
         enc = "+".join(e.replace("multilingual-", "") for e in self.encoders)
         c = self.cfg
         k0 = f"k0={c['k0']:<3}" if c["fusion"] == "rrf" else "       "
+        # La jerárquica no se dimensiona por `chunk`: ese número solo interviene
+        # al subdividir las secciones que no caben.
+        corte = (
+            f"{self.chunk}/{self.solape:.2f}"
+            if self.estrategia == config.ESTRATEGIA_FIJA
+            else f"secc({self.chunk})"
+        )
         return (
-            f"{enc:<28} {self.chunk}/{self.solape:.2f} {c['fusion']:<8} {k0} "
+            f"{enc:<28} {corte:<10} {c['fusion']:<8} {k0} "
             f"b={c['boost']:<5} d={c['max_por_doc']} n={c['candidatos']:<4} "
             f"u={('no' if not c['umbral'] else str(c['umbral'])):<4} "
             f"s={'sí' if c['subdividir'] else 'no'} a={c['agregacion']:<5}"
@@ -338,7 +350,7 @@ class Corrida:
         return {
             "receta": self.receta,
             "encoders": list(self.encoders), "chunk": self.chunk,
-            "solape": self.solape, **self.cfg,
+            "solape": self.solape, "estrategia": self.estrategia, **self.cfg,
             "ndcg@10": self.ndcg, "f1@3": self.f1,
             "ic_ndcg@10": list(self.ic_ndcg), "ic_f1@3": list(self.ic_f1),
             **(p or {}),
@@ -356,13 +368,19 @@ def comparar_con_la_base(corrida: Corrida, base: Corrida) -> dict[str, float]:
     comunes = sorted(set(corrida.por_consulta) & set(base.por_consulta))
     if not comunes:
         return {}
+
     salida: dict[str, float] = {}
     for metrica in ("ndcg@10", "f1@3"):
-        _, p = metricas.p_valor_permutacion(
-            [corrida.por_consulta[q][metrica] for q in comunes],
-            [base.por_consulta[q][metrica] for q in comunes],
-        )
+        a = [corrida.por_consulta[q][metrica] for q in comunes]
+        b = [base.por_consulta[q][metrica] for q in comunes]
+        _, p = metricas.p_valor_permutacion(a, b)
         salida[f"p_{metrica}"] = round(p, 4)
+        # Segunda opinión sobre los mismos pares: la permutación pesa la magnitud
+        # de cada diferencia y Wilcoxon solo su rango. Que las dos coincidan es lo
+        # que hace creíble una ventaja; que discrepen dice que depende de unas
+        # pocas consultas que se movieron mucho.
+        _, p_w = metricas.p_valor_wilcoxon(a, b)
+        salida[f"wilcoxon_{metrica}"] = round(p_w, 4)
     return salida
 
 
@@ -376,7 +394,20 @@ def correr(comando: list[str], etiqueta: str) -> None:
         raise SystemExit(f"{etiqueta} falló (código {codigo})")
 
 
-def pares_a_indexar(planes: list[Plan]) -> dict[tuple[int, float], list[str]]:
+def techo(plan: Plan) -> int:
+    """El fragmento más largo que este plan puede producir.
+
+    Con la estrategia fija es el presupuesto; con la jerárquica, el tope de
+    sección, que está por encima a propósito. Es lo que hay que contrastar con la
+    ventana del encoder: comprobar `chunk` daría por bueno un índice cuyos
+    fragmentos se truncan.
+    """
+    if plan.estrategia == config.ESTRATEGIA_FIJA:
+        return plan.chunk
+    return max(plan.chunk, config.SECCION_MAX_TOKENS)
+
+
+def pares_a_indexar(planes: list[Plan]) -> dict[tuple[int, float, str], list[str]]:
     """Qué encoder hay que indexar en qué fragmentación.
 
     Se saca de los planes y no del producto de las opciones porque una receta
@@ -389,21 +420,21 @@ def pares_a_indexar(planes: list[Plan]) -> dict[tuple[int, float], list[str]]:
     chunking que nadie midió. Las corridas que dependan de ellos se omiten después,
     por el mismo camino que las que les falta un índice.
     """
-    pares: dict[tuple[int, float], list[str]] = {}
+    pares: dict[tuple[int, float, str], list[str]] = {}
     for plan in planes:
-        cabe = [e for e in plan.encoders if config.cabe_en_ventana(plan.chunk, e)]
+        cabe = [e for e in plan.encoders if config.cabe_en_ventana(techo(plan), e)]
         if not cabe:
             continue
-        faltan = pares.setdefault((plan.chunk, plan.solape), [])
+        faltan = pares.setdefault((plan.chunk, plan.solape, plan.estrategia), [])
         faltan.extend(e for e in cabe if e not in faltan)
     return pares
 
 
 def preparar(planes: list[Plan], submuestra: Path, backend: str, lote: int | None) -> None:
     """Fragmenta e indexa lo que falte. Lo que ya esté se reutiliza."""
-    for (chunk, solape), encoders in pares_a_indexar(planes).items():
-        clave = clave_chunking(chunk, solape)
-        frag = ruta_fragmentos(chunk, solape)
+    for (chunk, solape, estrategia), encoders in pares_a_indexar(planes).items():
+        clave = clave_chunking(chunk, solape, estrategia)
+        frag = ruta_fragmentos(chunk, solape, estrategia)
         if frag.exists() and frag.stat().st_size > 0:
             print(f"{clave}: fragmentos reutilizados")
         else:
@@ -411,11 +442,12 @@ def preparar(planes: list[Plan], submuestra: Path, backend: str, lote: int | Non
             correr(
                 [str(ETAPAS / "03_fragmentar.py"),
                  "--max-tokens", str(chunk), "--solape", str(solape),
+                 "--estrategia", estrategia,
                  "--salida", str(frag), "--docs", str(submuestra)],
                 f"fragmentar {clave}",
             )
 
-        base = ruta_indices(chunk, solape)
+        base = ruta_indices(chunk, solape, estrategia)
         for encoder in encoders:
             if (base / f"encoder_{encoder}" / "index.faiss").exists():
                 print(f"  {encoder}: índice reutilizado")
@@ -461,12 +493,12 @@ def mapa_doc_a_fuente(base: Path) -> dict[str, str]:
 
 
 def evaluar_chunking(
-    chunk: int, solape: float, planes: list[Plan], juicios: dict, empar: dict,
-    preguntas: list,
+    chunk: int, solape: float, estrategia: str, planes: list[Plan],
+    juicios: dict, empar: dict, preguntas: list,
 ) -> list[Corrida]:
     """Mide los planes de una fragmentación, buscando una sola vez por consulta."""
-    clave = clave_chunking(chunk, solape)
-    base = ruta_indices(chunk, solape)
+    clave = clave_chunking(chunk, solape, estrategia)
+    base = ruta_indices(chunk, solape, estrategia)
 
     pedidos: list[str] = []
     for plan in planes:
@@ -474,9 +506,10 @@ def evaluar_chunking(
 
     # Aunque exista un índice de una corrida anterior, si el fragmento no cabe en
     # la ventana del encoder ese índice está truncado y no se usa.
-    no_caben = [e for e in pedidos if not config.cabe_en_ventana(chunk, e)]
+    tope = techo(planes[0])
+    no_caben = [e for e in pedidos if not config.cabe_en_ventana(tope, e)]
     if no_caben:
-        print(f"  {clave}: {no_caben} no admiten {chunk} tokens, se descartan")
+        print(f"  {clave}: {no_caben} no admiten {tope} tokens, se descartan")
     hay = [
         e for e in pedidos
         if e not in no_caben and (base / f"encoder_{e}" / "index.faiss").exists()
@@ -545,7 +578,8 @@ def evaluar_chunking(
 
         resumen = metricas.evaluar_textual(resultados, juicios, empar, mapa)
         corridas.append(Corrida(
-            encoders=plan.encoders, chunk=chunk, solape=solape, cfg=cfg,
+            encoders=plan.encoders, chunk=chunk, solape=solape,
+            estrategia=estrategia, cfg=cfg,
             ndcg=resumen["ndcg@10"], f1=resumen["f1@3"],
             ic_ndcg=resumen["ic_ndcg@10"], ic_f1=resumen["ic_f1@3"],
             receta=plan.receta, por_consulta=resumen["por_consulta"],
@@ -608,7 +642,8 @@ def informar(corridas: list[Corrida], top: int, carpeta: Path) -> None:
         # Sin letras griegas: la consola de Windows en español es cp1252 y una
         # delta la mata con UnicodeEncodeError después de haber medido todo.
         di(f"{'receta':<13} {'dif.NDCG@10':>12} {'dif.F1@3':>10}   "
-           f"{'veredicto':<9} {'p(NDCG)':>8} {'p(F1)':>7}")
+           f"{'veredicto':<9} {'p(NDCG)':>8} {'p(F1)':>7}"
+           f" {'wil(NDCG)':>10} {'wil(F1)':>8}")
         for i in orden:
             c = corridas[i]
             if c is base:
@@ -618,7 +653,11 @@ def informar(corridas: list[Corrida], top: int, carpeta: Path) -> None:
             p_de[i] = comparar_con_la_base(c, base)
             pn = p_de[i].get("p_ndcg@10")
             pf = p_de[i].get("p_f1@3")
+            wn = p_de[i].get("wilcoxon_ndcg@10")
+            wf = p_de[i].get("wilcoxon_f1@3")
             cols = (f"{pn:>8.4f} {pf:>7.4f}" if pn is not None else f"{'-':>8} {'-':>7}")
+            cols += (f" {wn:>10.4f} {wf:>8.4f}" if wn is not None
+                     else f" {'-':>10} {'-':>8}")
             di(f"{(c.receta or ''):<13} {dn:>+12.4f} {df:>+10.4f}   "
                f"{veredicto:<9} {cols}")
         # El p-valor es pareado —mismas consultas en las dos corridas— y por eso
@@ -626,6 +665,9 @@ def informar(corridas: list[Corrida], top: int, carpeta: Path) -> None:
         # dos consultas. Es la comparación que decide, no la diferencia de medias.
         di("  p pareado por permutación frente a la entrega; por debajo de 0.05")
         di("  la diferencia no se explica por el reparto de consultas.")
+        di("  wil es Wilcoxon de rangos con signo sobre los mismos pares: ignora")
+        di("  la magnitud y solo ordena, así que si discrepa de la permutación la")
+        di("  ventaja depende de unas pocas consultas que se movieron mucho.")
         if len(corridas) > 3:
             umbral = 0.05 / (2 * (len(corridas) - 1))
             di(f"  Son {2 * (len(corridas) - 1)} comparaciones: para leerlas todas a la vez")
@@ -822,16 +864,19 @@ def main() -> int:
 
     # Agrupadas por fragmentación: los índices de un chunking se cargan una vez y
     # todas sus corridas se miden sobre los mismos rankings en memoria.
-    por_chunking: dict[tuple[int, float], list[Plan]] = {}
+    por_chunking: dict[tuple[int, float, str], list[Plan]] = {}
     for plan in planes:
-        por_chunking.setdefault((plan.chunk, plan.solape), []).append(plan)
+        por_chunking.setdefault(
+            (plan.chunk, plan.solape, plan.estrategia), []
+        ).append(plan)
 
     pares = pares_a_indexar(planes)
     faltan_indices = sum(
         1
-        for (chunk, solape), encs in pares.items()
+        for (chunk, solape, estrategia), encs in pares.items()
         for e in encs
-        if not (ruta_indices(chunk, solape) / f"encoder_{e}" / "index.faiss").exists()
+        if not (ruta_indices(chunk, solape, estrategia) / f"encoder_{e}"
+                / "index.faiss").exists()
     )
 
     print(f"experimento: {nombre}  ->  {carpeta}")
@@ -885,10 +930,12 @@ def main() -> int:
     print(f"emparejamiento de fragmentos por texto, umbral {emparejamiento.UMBRAL}\n")
 
     corridas: list[Corrida] = []
-    for (chunk, solape), grupo in por_chunking.items():
-        print(f"{clave_chunking(chunk, solape)}:")
+    for (chunk, solape, estrategia), grupo in por_chunking.items():
+        print(f"{clave_chunking(chunk, solape, estrategia)}:")
         corridas.extend(
-            evaluar_chunking(chunk, solape, grupo, juicios, empar, preguntas)
+            evaluar_chunking(
+                chunk, solape, estrategia, grupo, juicios, empar, preguntas
+            )
         )
 
     informar(corridas, args.top, carpeta)

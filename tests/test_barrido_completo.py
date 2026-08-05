@@ -165,11 +165,12 @@ class TestPresets:
         op.update(mod.PRESETS["todo"])
         op["max_fusion"] = 1
         pares = mod.pares_a_indexar(mod.planificar_rejilla(op))
-        for (chunk, _), encoders in pares.items():
+        for (chunk, _, _), encoders in pares.items():
             for encoder in encoders:
                 assert config.cabe_en_ventana(chunk, encoder), f"{chunk} en {encoder}"
-        assert "me5-small" not in pares.get((768, 0.15), [])
-        assert "bge-m3" in pares[(768, 0.15)]
+        fijo = config.ESTRATEGIA_FIJA
+        assert "me5-small" not in pares.get((768, 0.15, fijo), [])
+        assert "bge-m3" in pares[(768, 0.15, fijo)]
 
 
 class TestRecetas:
@@ -201,6 +202,7 @@ class TestRecetas:
         vistas = {}
         for nombre, receta in mod_recetas.RECETAS.items():
             firma = (receta.encoders, receta.chunk, receta.solape,
+                     receta.estrategia,
                      tuple(sorted(receta.politica().items())))
             assert firma not in vistas, f"{nombre} repite a {vistas.get(firma)}"
             vistas[firma] = nombre
@@ -254,8 +256,9 @@ class TestRecetas:
         # encoder haría falta otra receta para que el caso tenga dos que repartir.
         pares = mod.pares_a_indexar(
             mod.planificar_recetas(["dos-encoders", "contexto"]))
-        assert pares[(768, 0.15)] == ["bge-m3"]
-        assert set(pares[(config.CHUNK_PRESUPUESTO, config.CHUNK_SOLAPE)]) == {
+        fijo = config.ESTRATEGIA_FIJA
+        assert pares[(768, 0.15, fijo)] == ["bge-m3"]
+        assert set(pares[(config.CHUNK_PRESUPUESTO, config.CHUNK_SOLAPE, fijo)]) == {
             "bge-m3", "me5-large"
         }
 

@@ -1,9 +1,9 @@
 
 corpus: 64,484 fragmentos, 50 consultas
 receta          NDCG@10     F1@3   frente a la entrega
-bge-top2         0.7329   0.7000   NDCG +0.1068 (p=0.0001)  F1 -0.0213 (p=0.5129)
-convexa          0.6597   0.7547   NDCG +0.0336 (p=0.0145)  F1 +0.0333 (p=0.2841)
-filtrado         0.6323   0.7347   NDCG +0.0063 (p=0.4029)  F1 +0.0133 (p=0.6500)
-entrega          0.6260   0.7213
+entrega          0.7329   0.7000
+convexa          0.6597   0.7547   NDCG -0.0732 (p=0.0012)  F1 +0.0547 (p=0.1215)
+filtrado         0.6318   0.7347   NDCG -0.1011 (p=0.0000)  F1 +0.0347 (p=0.2940)
+dos-encoders     0.6255   0.7213   NDCG -0.1074 (p=0.0001)  F1 +0.0213 (p=0.5129)
 
   6 comparaciones: umbral corregido 0.0083, no 0.05.

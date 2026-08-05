@@ -25,17 +25,19 @@ from pathlib import Path
 from tqdm import tqdm
 
 from aphelion import config
-from aphelion.indice import chunking
+from aphelion.indice import chunking, estructura
 from aphelion.ingesta import limpieza
 
 # Estado por proceso: evita reenviar los parámetros en cada tarea.
 _OPCIONES: dict = {}
 
 
-def _inicializar(encoder: str, max_tokens: int, solape: float) -> None:
+def _inicializar(encoder: str, max_tokens: int, solape: float,
+                 estrategia: str = config.ESTRATEGIA_FIJA) -> None:
     _OPCIONES["encoder"] = encoder
     _OPCIONES["max_tokens"] = max_tokens
     _OPCIONES["solape"] = solape
+    _OPCIONES["estrategia"] = estrategia
     # Fuerza la carga del tokenizador aquí y no en la primera tarea, para que el
     # coste aparezca una vez por worker y no distorsione la barra de progreso.
     chunking._tokenizador(encoder)
@@ -56,14 +58,30 @@ def _procesar(ruta: str) -> tuple[str, list[dict]]:
     if not texto.strip():
         return "vacio_tras_limpieza", []
 
-    fragmentos = chunking.fragmentar(
-        doc,
-        texto,
-        idioma,
-        nombre_encoder=_OPCIONES["encoder"],
-        max_tokens=_OPCIONES["max_tokens"],
-        solape=_OPCIONES["solape"],
-    )
+    if _OPCIONES.get("estrategia") == config.ESTRATEGIA_JERARQUICA:
+        formato = (doc.get("tipo") or doc.get("formato") or "").lower()
+        secciones = estructura.secciones_de(doc, formato, config.CORPUS)
+        fragmentos = chunking.fragmentar_jerarquico(
+            doc,
+            texto,
+            idioma,
+            secciones,
+            nombre_encoder=_OPCIONES["encoder"],
+            max_tokens=_OPCIONES["max_tokens"],
+            solape=_OPCIONES["solape"],
+            # El boilerplate se decide sobre el documento entero, no sección a
+            # sección: una cabecera se reconoce porque se repite entre páginas.
+            basura=limpieza.lineas_boilerplate(limpieza.normalizar(doc["texto"])),
+        )
+    else:
+        fragmentos = chunking.fragmentar(
+            doc,
+            texto,
+            idioma,
+            nombre_encoder=_OPCIONES["encoder"],
+            max_tokens=_OPCIONES["max_tokens"],
+            solape=_OPCIONES["solape"],
+        )
     if not fragmentos:
         return "sin_fragmentos", []
 
@@ -76,6 +94,13 @@ def main() -> int:
     ap.add_argument("--solape", type=float, default=config.CHUNK_SOLAPE)
     ap.add_argument("--salida", type=Path, default=config.FRAGMENTOS)
     ap.add_argument("--encoder", default=config.ENCODER_PRINCIPAL)
+    ap.add_argument(
+        "--estrategia",
+        choices=config.ESTRATEGIAS_CHUNKING,
+        default=config.ESTRATEGIA_FIJA,
+        help="fijo acumula oraciones hasta el presupuesto; jerarquico parte por "
+        "las secciones que declara el documento y solo subdivide las que no caben",
+    )
     ap.add_argument("--procesos", type=int, default=max(1, (os.cpu_count() or 4) - 1))
     ap.add_argument(
         "--docs",
@@ -128,7 +153,7 @@ def main() -> int:
         with ProcessPoolExecutor(
             max_workers=args.procesos,
             initializer=_inicializar,
-            initargs=(args.encoder, args.max_tokens, args.solape),
+            initargs=(args.encoder, args.max_tokens, args.solape, args.estrategia),
         ) as pool:
             tareas = pool.map(_procesar, [str(a) for a in archivos], chunksize=4)
             for estado, fragmentos in tqdm(

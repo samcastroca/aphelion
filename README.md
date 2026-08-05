@@ -442,6 +442,26 @@ uv run python -m aphelion.evaluacion.recetas       # el catálogo con sus parám
 | `sin-recorte` | bge-m3 | **345** / 0,15 | — | top2 | entregar el fragmento sin truncar |
 | `granular` | bge-m3 | **256** / **0** | — | max | más precisión en el top-10 |
 | `contexto` | bge-m3 | **768** / 0,15 | — | top3 | más contexto por vector |
+| `jerarquico-v1` | bge-m3 | **secciones** | — | top2 | la estructura del documento manda |
+
+`jerarquico-v1` es la única que no discute el *tamaño* del fragmento sino **dónde
+cae la frontera**: toma como unidad la sección que el documento declara y solo
+subdivide las que no caben. La estructura se lee del PDF original con PyMuPDF
+—tamaño de fuente, negrita y posición, todo relativo al cuerpo de cada
+documento—, porque la extracción guarda texto plano y esa señal ya no está en
+`trabajo/texto/`. Lo que no declara jerarquía —JSON, CSV, XLSX, PBF y los PDFs
+escaneados, que no tienen tipografía que leer— cae a la estrategia fija, así que
+ningún documento se queda sin fragmentar.
+
+```powershell
+.\ejecutar.ps1 -Recetas entrega,jerarquico-v1 -Nombre jerarquico-v1
+```
+
+Dos detalles que condicionan cómo se lee su resultado: sus fragmentos llegan a
+650 tokens, por encima del presupuesto de 504, lo que es inocuo con BGE-M3
+(ventana 8192) y truncaría con mE5-large —`Receta.problemas()` lo bloquea—; y de
+los 252 PDF de la submuestra hay 18 escaneados que van por la estrategia fija,
+que son justo los que responden q033–q050.
 
 El menú (opción *"Correr recetas completas"*) las lista con sus parámetros, su
 apuesta y cuántos índices le faltan a cada una, y se eligen varias con coma. Las
