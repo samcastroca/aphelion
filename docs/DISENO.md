@@ -445,11 +445,79 @@ la literatura, y medirlo convierte esa afirmación en un número propio.
 
 ## 10. Grafo de conocimiento (bonus)
 
-Componente opcional, planificado **al final** del cronograma y sacrificable si el tiempo
-aprieta. NER multilingüe sobre los fragmentos, extracción de relaciones por
-dependencias sintácticas, y construcción con NetworkX exportando a `grafo.graphml`. Cada
-tripleta conserva referencia a su `doc_id` y `chunk_id` de origen. Se integra a la
-recuperación como una lista ordenada adicional dentro del RRF.
+Componente opcional. Las tres etapas de la §7.2 viven en `src/aphelion/grafo/` y las
+construye `scripts/etapas/04_grafo.py`, que comparte número con `04_indexar` porque
+comparte escalón: el grafo se arma sobre los fragmentos, no sobre los vectores.
+
+**Se construye pero no se conecta.** Son dos decisiones distintas y atarlas sale caro.
+La §7 puntúa por *construir* el grafo y la §1.4 lo recoge como archivo; la §8.5, en
+cambio, dice que el equipo «puede» combinarlo con los resultados vectoriales. Entregar
+`base_vectorial/grafo/grafo.graphml` cobra el bonus sin tocar nada. Meter un canal en la
+política de recuperación obliga a escribirla también dentro de `generador.py`, a ampliar
+la prueba de paridad y a revalidar `06_verificar` — es decir, a poner en juego lo único
+eliminatorio del reto a cambio de una ganancia que nadie ha medido todavía. Se mide
+primero, en el barrido; se conecta después, si sale a favor.
+
+**Etapa 1 — NER.** Multilingüe y de tipos abiertos: las entidades que importan a estas
+50 consultas son *sistema de armas autónomo*, *órbita baja terrestre* o *política
+pública*, y un clasificador con las cuatro clases de CoNLL las mete todas en MISC. Se usa
+`fastino/gliner2-multi-v1` (Apache-2.0, declara es/en/pt) por su export ONNX, que corre
+sobre el mismo DirectML que ya monta la codificación. Quedan fuera
+`Babelscape/wikineural-multilingual-ner` —CC BY-NC-SA 4.0, y es el multilingüe que uno
+elegiría por defecto— y los modelos de spaCy en español, que son GPL-3.0 por herencia de
+UD AnCora. El paquete `gliner` v1 no se usa aunque su modelo sirva: declara
+`transformers<5.14.0` contra el `>=5.14.1` del proyecto, el mismo choque que dejó fuera a
+`optimum`.
+
+**Etapa 2 — relaciones por patrones.** La §7.2 admite tres vías y las otras dos salen
+caras: los extractores generativos (REBEL, mREBEL) son decoders, que la §4.2 y la §8.3
+prohíben, y mREBEL es además CC BY-NC-SA 4.0; GLiREL, que sí clasifica en lugar de
+generar, es también no comercial; y los parsers de dependencias de spaCy arrastran GPL en
+español y CC BY-SA en portugués. Queda un inventario cerrado de catorce patrones sobre
+pares de menciones vecinas dentro de la misma oración, con las pasivas comprobadas antes
+que las activas para que «desarrollado por» no salga con el sujeto y el objeto
+intercambiados. Las conjugaciones están enumeradas y no comodinadas: `desarroll\w+`
+captura también «desarrollo», que es un sustantivo, e inventaría relaciones que el texto
+no afirma. `knowledgator/gliner-relex-large-v1.0` (Apache-2.0, clasificación sobre pares)
+entra al barrido como candidato a mejorarlo, no como sustituto: no declara soporte
+multilingüe.
+
+**Etapa 3 — construcción.** Tres tipos de nodo y tres de arista:
+
+```
+documento --CONTIENE--> fragmento --MENCIONA--> entidad
+                                   entidad --RELACION--> entidad
+```
+
+La procedencia (`doc_id`, `chunk_id`, evidencia textual) va en la arista `RELACION`, que
+es lo que exige la §7.2 y de paso resuelve la serialización: el escritor GraphML de
+NetworkX solo admite `int`, `str`, `float` y `bool`, así que guardar «los chunks donde
+aparece esta entidad» como lista dentro del nodo levanta un `TypeError` al exportar —al
+final de la etapa más cara, no al construirla—. `construccion.validar_escalares` lo
+comprueba antes de escribir y `tests/test_grafo.py` exporta y relee el grafo en cada
+`pytest`.
+
+La poda es parte del diseño y no una optimización posterior: GraphML es XML y medio
+millón de aristas de mención se van a cientos de megas. Entran las entidades que aparecen
+en dos documentos o más —una entidad citada una sola vez no conecta nada— y en menos del
+5% del corpus —por encima es membrete institucional—, con un tope de doce por fragmento.
+El tope superior nunca baja del inferior: sobre una muestra pequeña, el 5% redondea a
+cero y la ventana se queda sin nadie dentro, que es un grafo vacío sin ningún error.
+
+**La canonicalización es el paso que la especificación no nombra** y el que decide si
+esto informa o es ruido. Sin unificar superficies, «Estados Unidos», «United States» y
+«EE. UU.» son tres nodos. La normalización resuelve mayúsculas, tildes, puntuación y
+artículos de los tres idiomas; el cruce entre idiomas lo cierra agrupar los nombres por
+su embedding **con el mismo encoder que construye el índice**, que es cross-lingüe por
+construcción, ya está cargado en esa etapa y no añade ninguna licencia que declarar.
+
+**Si se conecta**, es como una lista ordenada más dentro del RRF:
+`recuperacion.fusionar_rrf` recibe un diccionario de canal a ranking, así que el grafo
+entra como una entrada más y la fusión no se entera. Tiene que ser RRF y no la convexa ni
+CombSUM: este canal puntúa contando menciones y relaciones, no cosenos, y solo RRF es
+inmune a esa diferencia de escala. Iría dentro de `Recuperador.buscar` y no de `ordenar`,
+porque depende de la consulta y no de los hiperparámetros de fusión: es la mitad que el
+barrido cachea una vez para reordenar cien.
 
 ---
 

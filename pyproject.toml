@@ -45,6 +45,22 @@ dependencies = [
 # installed!" tras un minuto de trabajo tirado.
 amd = ["onnx>=1.20", "onnxruntime-directml>=1.24"]
 
+# Grafo de conocimiento (§7, bonus). Es un extra y no una dependencia base porque
+# el componente es opcional y la pasada de NER solo se corre en la máquina que
+# construye la entrega.
+#     uv sync --extra grafo
+#
+# `gliner2-onnx` y no `gliner`: el segundo declara `transformers<5.14.0` y este
+# proyecto tiene fijado `>=5.14.1`, así que uv rechaza la resolución — el mismo
+# choque que ya dejó fuera a `optimum`. El primero pide `transformers>=4.40` sin
+# tope, no arrastra torch y corre sobre el mismo ONNX Runtime que usa la Radeon.
+# Licencias: el paquete es MIT y el modelo (`fastino/gliner2-multi-v1`, con su
+# export ONNX) Apache-2.0, que es lo que pide la §4.3.
+#
+# networkx llega igualmente como dependencia de torch, pero aquí se importa
+# directo —`aphelion.grafo.construccion`— y una dependencia que se usa se declara.
+grafo = ["gliner2-onnx>=0.1.1", "networkx>=3.0"]
+
 # Codificación por GPU en NVIDIA. Las ruedas de PyPI para Windows son solo CPU,
 # así que la build con CUDA hay que pedirla al índice de PyTorch.
 #     uv sync --extra cuda

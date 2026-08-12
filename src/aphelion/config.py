@@ -45,6 +45,25 @@ ONNX = TRABAJO / "onnx"  # modelos exportados para la GPU Radeon
 FRAGMENTOS = TRABAJO / "fragmentos.jsonl"
 CONSULTAS = TRABAJO / "consultas.jsonl"
 
+# Entidades reconocidas por fragmento (etapa 04_grafo). Se cachea por la misma
+# razón que los embeddings: una pasada de NER sobre el corpus cuesta lo que una
+# indexación con encoder base, y no debería repetirse por reconstruir el grafo
+# con otra poda. No se versiona, como el resto de `trabajo/`: a diferencia del
+# OCR, depende solo de un modelo anclado y se regenera igual en cualquier máquina.
+ENTIDADES = TRABAJO / "entidades.jsonl"
+
+
+def ruta_entidades(backend: str) -> Path:
+    """El backend de NER entra en el nombre del archivo, como la huella entra en
+    el de la caché de embeddings.
+
+    Sin esto, una corrida de comprobación con `--ner falso` deja una caché que la
+    corrida siguiente con el modelo real da por buena, y el grafo del entregable
+    sale de un reconocedor de mayúsculas. Es el mismo fallo que evita `huella` en
+    `04_indexar`: números plausibles de una configuración que nadie corrió.
+    """
+    return TRABAJO / f"entidades-{backend}.jsonl"
+
 # Experimentación. Los índices y los fragmentos se comparten entre experimentos
 # porque son caros y su contenido queda determinado por (chunking, encoder): dos
 # experimentos que pidan el mismo índice deben reutilizarlo, no duplicar 117 MB.
@@ -105,6 +124,11 @@ def ruta_indices_prueba(
 ENTREGA = RAIZ / "entrega"
 BASE_VECTORIAL = ENTREGA / "base_vectorial"
 RESULTADOS = ENTREGA / "resultados.jsonl"
+
+# El grafo de conocimiento va dentro de `base_vectorial/`, no al lado: es donde
+# lo coloca el árbol de directorios de la §1.4, a la misma altura que las
+# carpetas por encoder. El nombre del archivo también lo fija el reto.
+GRAFO = BASE_VECTORIAL / "grafo" / "grafo.graphml"
 
 # --- Encoders -------------------------------------------------------------
 # Ambos son arquitecturas encoder (XLM-RoBERTa) con licencia MIT. El reto
@@ -375,6 +399,41 @@ PRF_BETA = 0.5
 
 # Correspondencia consulta -> fenómeno, según el orden del archivo de preguntas.
 RANGOS_FENOMENO = {1: (1, 16), 2: (17, 32), 3: (33, 50)}
+
+# --- Grafo de conocimiento (§7, bonus) ------------------------------------
+# Ninguna de estas constantes está medida todavía: el grafo se construye pero no
+# se conecta a la recuperación, así que no hay NDCG@10 contra el que calibrarlas.
+# Los valores son puntos de partida razonados, y el comentario dice el
+# razonamiento para que quien lo mida sepa qué esperaba encontrar.
+
+# Entidades por fragmento en el grafo. Un fragmento de 504 tokens menciona
+# muchas más, pero las que están por debajo del tope son las que aparecen una
+# vez de pasada: engordan el XML —que es donde duele, GraphML es texto— sin
+# abrir caminos que no abra ya la entidad principal.
+GRAFO_MAX_ENTIDADES_POR_FRAGMENTO = 12
+
+# Poda por frecuencia documental. Por abajo, una entidad que aparece en un solo
+# documento no conecta dos fragmentos, que es lo único que sabe hacer el canal
+# del grafo. Por arriba, una que aparece en más del 5% del corpus es membrete
+# —«Colombia» en un corpus colombiano, «AI» en el fenómeno 1— y devolvería medio
+# índice sin discriminar nada.
+GRAFO_MIN_DF = 2
+GRAFO_MAX_FRACCION_DF = 0.05
+
+# Cuántos fragmentos aporta el canal del grafo antes de fusionar. Deliberadamente
+# menor que CANDIDATOS_POR_INDICE (200): aquel está medido para índices densos,
+# donde la cola profunda solo suma consenso al F1@3, mientras que este canal
+# ordena por conteo de menciones y su cola es mucho más ruidosa. Empezar bajo y
+# subir si el barrido lo pide es más seguro que al revés.
+GRAFO_CANDIDATOS = 50
+
+# Cuánto puntúa un fragmento que menciona a un vecino de primer orden de la
+# entidad consultada, frente a uno que la menciona directamente. Los vecinos son
+# lo que distingue un grafo de una lista invertida —la consulta sobre basura
+# orbital debería alcanzar las misiones que la generan—, pero a peso completo
+# ahogarían la señal directa. 0 desactiva el salto y deja el canal en búsqueda
+# por entidad exacta, que es la comparación de control del barrido.
+GRAFO_PESO_VECINO = 0.35
 
 # --- Extracción -----------------------------------------------------------
 

@@ -117,6 +117,16 @@ def main() -> int:
     print("índices:")
     copiar_indices(destino / "base_vectorial")
 
+    # El grafo no se copia: `04_grafo` lo escribe ya en su sitio dentro de
+    # `base_vectorial/`, que es donde lo pone el árbol de la §1.4. Aquí solo se
+    # informa, porque esta etapa es la que dice qué lleva la entrega. Su ausencia
+    # no es un fallo: es el componente bonus.
+    print("\ngrafo:")
+    if config.GRAFO.exists():
+        print(f"  grafo.graphml ({config.GRAFO.stat().st_size / 1e6:.1f} MB)")
+    else:
+        print("  sin grafo (§7 es opcional; se construye con scripts/etapas/04_grafo.py)")
+
     print("\ngenerador:")
     if not GENERADOR.exists():
         print(f"  falta {GENERADOR}: es código fuente versionado, no un artefacto")

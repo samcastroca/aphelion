@@ -8,8 +8,14 @@ tras una interrupción no repite trabajo hecho.
     02_ocr         los PDFs sin capa de texto         -> trabajo/texto/ (reescribe)
     03_fragmentar  limpieza y fragmentación           -> trabajo/fragmentos.jsonl
     04_indexar     codificación e índice, por encoder -> entrega/base_vectorial/
+    04_grafo       NER, relaciones y GraphML (bonus)  -> .../grafo/grafo.graphml
     05_empaquetar  resultados, informe e índices      -> entrega/
     06_verificar   el entregable reproduce lo que produce el paquete
+
+`04_grafo` comparte número con `04_indexar` porque comparte escalón: se construye
+sobre los fragmentos y no sobre los vectores, así que no depende de la indexación
+y podría correr en paralelo. Es el componente bonus (§7) y se omite con
+`--sin-grafo`; si le falta el backend de NER, avisa y no tumba la corrida.
 
 El orden no es negociable: el OCR tiene que correr **antes** de fragmentar, o los
 documentos escaneados entran al índice vacíos.
@@ -73,6 +79,7 @@ def etapas(
     backend: str,
     lote: int | None,
     reparto: str | None = None,
+    sin_grafo: bool = False,
 ) -> list[tuple[str, list[str]]]:
     plan: list[tuple[str, list[str]]] = []
 
@@ -104,6 +111,16 @@ def etapas(
     # máquina solo aporta su tramo de vectores.
     if reparto:
         return plan
+
+    # El grafo de conocimiento (§7) es el componente bonus. Va después de indexar
+    # aunque no dependa del índice —se construye sobre los fragmentos— para que
+    # la GPU haga primero lo que sí es obligatorio. La etapa no puede tumbar el
+    # pipeline: si le falta el backend de NER avisa y devuelve 0, igual que
+    # `05_empaquetar` con el PDF del informe. Perder las dos etapas siguientes
+    # —una de ellas la que comprueba lo único eliminatorio— por un extra opcional
+    # sería exactamente el fallo que no nos podemos permitir.
+    if not sin_grafo:
+        plan.append(("04_grafo", [str(ETAPAS / "04_grafo.py")]))
 
     plan.append(("05_empaquetar", [str(ETAPAS / "05_empaquetar.py")]))
     # Última etapa y no opcional: que `generador.py` reproduzca lo que produce el
@@ -209,6 +226,11 @@ def main() -> int:
         help="codifica solo el tramo A%%-B%% de los bloques, para repartir entre máquinas",
     )
     ap.add_argument(
+        "--sin-grafo",
+        action="store_true",
+        help="omite el grafo de conocimiento (§7, bonus)",
+    )
+    ap.add_argument(
         "--forzar",
         action="store_true",
         help="sigue aunque la comprobación de entorno encuentre problemas",
@@ -236,7 +258,7 @@ def main() -> int:
     else:
         lote = None
 
-    plan = etapas(encoders, args.sin_ocr, backend, lote, args.reparto)
+    plan = etapas(encoders, args.sin_ocr, backend, lote, args.reparto, args.sin_grafo)
 
     if args.desde:
         nombres = [n for n, _ in plan]
