@@ -54,8 +54,8 @@ from aphelion.grafo import construccion, entidades as ent, relaciones as rel
 from aphelion.indice.chunking import dividir_en_oraciones
 
 
-def leer_fragmentos(limite: int | None) -> list[dict]:
-    """Los fragmentos del corpus, de donde estén.
+def ruta_fragmentos() -> Path:
+    """De dónde salen los fragmentos.
 
     `trabajo/fragmentos.jsonl` es la fuente natural, pero no se versiona y en una
     máquina que solo tenga la entrega no existe. La metadata del índice principal
@@ -68,22 +68,39 @@ def leer_fragmentos(limite: int | None) -> list[dict]:
         config.BASE_VECTORIAL / f"encoder_{config.ENCODER_PRINCIPAL}" / "metadata.jsonl",
     )
     for ruta in candidatas:
-        if not ruta.exists():
-            continue
-        registros: list[dict] = []
-        with ruta.open(encoding="utf-8") as fh:
-            for linea in fh:
-                if not linea.strip():
-                    continue
-                registros.append(json.loads(linea))
-                if limite and len(registros) >= limite:
-                    break
-        print(f"fragmentos: {len(registros):,} de {ruta.name}")
-        return registros
+        if ruta.exists():
+            return ruta
 
     raise FileNotFoundError(
         "no hay fragmentos: ejecuta antes scripts/etapas/03_fragmentar.py"
     )
+
+
+def contar_fragmentos() -> int:
+    """Cuántos fragmentos hay, sin parsear ninguno.
+
+    Existe para que se pueda extrapolar el coste de una corrida con `--limite` al
+    corpus entero sin cargarlo: `leer_fragmentos` construye un dict por línea, y
+    sobre los 147 MB de la metadata eso son varios GB de memoria para averiguar un
+    número. Mismo papel que `04_indexar.py --huella`: se pregunta y se sale.
+    """
+    with ruta_fragmentos().open(encoding="utf-8") as fh:
+        return sum(1 for linea in fh if linea.strip())
+
+
+def leer_fragmentos(limite: int | None) -> list[dict]:
+    """Los fragmentos del corpus, hasta `limite` si se pide."""
+    ruta = ruta_fragmentos()
+    registros: list[dict] = []
+    with ruta.open(encoding="utf-8") as fh:
+        for linea in fh:
+            if not linea.strip():
+                continue
+            registros.append(json.loads(linea))
+            if limite and len(registros) >= limite:
+                break
+    print(f"fragmentos: {len(registros):,} de {ruta.name}")
+    return registros
 
 
 def reconocer(
@@ -198,6 +215,11 @@ def main() -> int:
         help="procesos para segmentar en oraciones al extraer relaciones",
     )
     ap.add_argument("--limite", type=int, help="usa solo los primeros N fragmentos")
+    ap.add_argument(
+        "--contar",
+        action="store_true",
+        help="imprime cuántos fragmentos hay y sale, sin construir nada",
+    )
     ap.add_argument("--rehacer-ner", action="store_true", help="ignora trabajo/entidades.jsonl")
     ap.add_argument(
         "--agrupar-entidades",
@@ -206,6 +228,10 @@ def main() -> int:
     )
     ap.add_argument("--destino", type=Path, default=config.GRAFO)
     args = ap.parse_args()
+
+    if args.contar:
+        print(contar_fragmentos())
+        return 0
 
     fragmentos = leer_fragmentos(args.limite)
 

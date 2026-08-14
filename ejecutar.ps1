@@ -668,6 +668,13 @@ if ($nvidia) {
     $script:Extras = @("--extra", "amd")
 }
 
+# `grafo` va con los demás y no aparte: `04_grafo` es una etapa del pipeline, y
+# sin su extra la corrida completa llegaba hasta ella para avisar de que no hay
+# backend de NER y seguir sin grafo. Instalar el paquete no descarga ningún
+# modelo —eso pasa en el primer uso—, así que no cuesta nada en las máquinas que
+# nunca construyan el bonus.
+$script:Extras += @("--extra", "grafo")
+
 CorrerUv sync @script:Extras
 if ($LASTEXITCODE -ne 0) { throw "uv sync falló" }
 
