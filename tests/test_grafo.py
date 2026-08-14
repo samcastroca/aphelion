@@ -152,6 +152,81 @@ def test_admisible_descarta_ruido_tabular():
     assert not ent.admisible(" ".join(["palabra"] * 9))  # media frase
 
 
+# --- Ventaneo y NER por lotes ---------------------------------------------
+#
+# El batching es lo que separa una etapa de minutos de una de 15 horas, pero lo
+# que puede romper en silencio no es la velocidad: es el remapeo de offsets. Una
+# mención de la segunda ventana con la posición de la primera produce una tripleta
+# cuya evidencia cita un texto que no la respalda, y nada falla. Todo esto se
+# ejercita con `NerFalso`, sin GPU y sin red, que es justo el punto de que el
+# ventaneo viva fuera del backend.
+
+
+def test_la_ventana_cubre_el_texto_entero_y_solapa():
+    texto = "a" * 3000
+    tramos = ent.ventanas(texto, ancho=1200, solape=200)
+
+    assert tramos[0][0] == 0
+    assert tramos[-1][1] == len(texto)
+    # Cada tramo empieza antes de que acabe el anterior: sin solape, una entidad a
+    # caballo de la frontera no la ve ninguna de las dos ventanas.
+    for previo, siguiente in zip(tramos, tramos[1:]):
+        assert siguiente[0] < previo[1]
+
+
+def test_el_texto_corto_es_una_sola_ventana():
+    assert ent.ventanas("NASA y ESA", ancho=1200, solape=200) == [(0, 10)]
+
+
+def test_reconocer_corpus_devuelve_offsets_del_fragmento_no_de_la_ventana():
+    # La entidad va más allá del ancho de ventana a propósito: si el remapeo no
+    # sumara el desplazamiento, `inicio` apuntaría al primer millar de caracteres.
+    relleno = "el texto de relleno sin entidades. " * 60
+    # Sin artículo delante: `NerFalso` encadena mayúsculas y con «La» se llevaría
+    # «La NASA» como una sola mención, que aquí solo estorba.
+    texto = relleno + "operado por NASA en órbita baja."
+    fragmentos = [fragmento("c1", "d1", texto)]
+
+    menciones = ent.reconocer_corpus(fragmentos, ent.NerFalso(), tam_lote=4)
+
+    nasa = [m for m in menciones["c1"] if m.texto == "NASA"]
+    assert nasa, "el ventaneo perdió la entidad del final del fragmento"
+    assert texto[nasa[0].inicio : nasa[0].fin] == "NASA"
+    assert nasa[0].inicio > 1200
+
+
+def test_reconocer_corpus_no_duplica_lo_que_cae_en_el_solape():
+    texto = "x" * 1150 + " Agencia Espacial Europea " + "y" * 1500
+    menciones = ent.reconocer_corpus([fragmento("c1", "d1", texto)], ent.NerFalso())
+
+    agencia = [m for m in menciones["c1"] if m.texto == "Agencia Espacial Europea"]
+    assert len(agencia) == 1
+
+
+def test_reconocer_corpus_da_lo_mismo_sea_cual_sea_el_lote():
+    # El tamaño de lote es un parámetro de rendimiento: si cambia el resultado, el
+    # grafo deja de ser reproducible entre máquinas con distinta VRAM.
+    fragmentos = [
+        fragmento(f"c{i}", "d1", f"La NASA y la Agencia Espacial Europea firman el acuerdo {i}.")
+        for i in range(9)
+    ]
+    uno = ent.reconocer_corpus(fragmentos, ent.NerFalso(), tam_lote=1)
+    muchos = ent.reconocer_corpus(fragmentos, ent.NerFalso(), tam_lote=32)
+
+    assert uno == muchos
+    assert len(uno) == 9
+
+
+def test_situar_descarta_la_mencion_cuyos_offsets_no_cuadran():
+    # Ninguna librería de NER documenta si `start`/`end` son caracteres o tokens.
+    # Si el corte no coincide con la superficie, se busca; si tampoco aparece, la
+    # mención se descarta antes que citar un texto que no la respalda.
+    texto = "La NASA opera el telescopio."
+    assert ent._situar(texto, "NASA", 3, 7) == (3, 7)
+    assert ent._situar(texto, "NASA", 1, 2) == (3, 7)  # offsets en otra unidad
+    assert ent._situar(texto, "ESA", 0, 3) is None  # no está en el texto
+
+
 # --- Caché ----------------------------------------------------------------
 
 

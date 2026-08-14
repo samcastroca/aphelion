@@ -14,30 +14,39 @@ indexación con encoder base, y reconstruir el grafo con otra poda no debería
 pagarla otra vez. Va a `trabajo/entidades.jsonl` y las corridas siguientes la
 reutilizan salvo `--rehacer-ner`.
 
-**Backends de NER.** `onnx` usa `fastino/gliner2-multi-v1` exportado (Apache-2.0)
-a través de `gliner2-onnx` (MIT), que no arrastra torch y admite el proveedor
-DirectML que este proyecto ya monta para la Radeon. Es una dependencia opcional:
-si no está instalada, esta etapa lo dice y no rompe el resto del pipeline. El
-backend `falso` no descarga nada y sirve para comprobar el esquema y la
-exportación de punta a punta antes de gastar GPU.
+**Backends de NER.** Los dos reales sirven `fastino/gliner2-multi-v1`
+(Apache-2.0, 205M), mismos pesos; lo que cambia es el motor:
+
+- `gliner2` (por defecto) es el paquete oficial sobre PyTorch. Coloca el modelo
+  en la GPU e infiere por lotes, que es lo que hace que esta etapa dure minutos.
+- `onnx` es el export vía `gliner2-onnx`, sin inferencia por lotes y con la
+  sesión en CPU salvo que se le pase `--proveedor`. Se conserva porque es el
+  único camino a DirectML, la GPU de la máquina de desarrollo.
+- `falso` no descarga nada y sirve para comprobar el esquema y la exportación de
+  punta a punta antes de gastar GPU.
+
+Es una dependencia opcional: si no está instalada, esta etapa lo dice y no rompe
+el resto del pipeline.
 
 Uso:
     uv run python scripts/etapas/04_grafo.py                    # NER real, corpus entero
     uv run python scripts/etapas/04_grafo.py --ner falso        # sin modelo, para probar
     uv run python scripts/etapas/04_grafo.py --limite 2000      # una muestra
+    uv run python scripts/etapas/04_grafo.py --lote 64          # más ventanas por lote
     uv run python scripts/etapas/04_grafo.py --agrupar-entidades  # fusión cross-lingüe
 
-    # Si se prefiere el backend `gliner` v1, que declara transformers<5.14.0 y
-    # por tanto no convive con el entorno del proyecto:
-    uv run --isolated --with gliner2-onnx python scripts/etapas/04_grafo.py
+    # En la Radeon, por DirectML:
+    uv run python scripts/etapas/04_grafo.py --ner onnx --proveedor DmlExecutionProvider
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from aphelion import config
@@ -77,41 +86,117 @@ def leer_fragmentos(limite: int | None) -> list[dict]:
     )
 
 
-def reconocer(fragmentos: list[dict], backend_nombre: str, modelo: str | None) -> dict:
-    """NER sobre cada fragmento, con aviso de progreso cada minuto de trabajo."""
-    backend = ent.cargar_backend(backend_nombre, modelo)
-    menciones: dict[str, list[ent.Mencion]] = {}
+def reconocer(
+    fragmentos: list[dict],
+    backend_nombre: str,
+    modelo: str | None,
+    dispositivo: str,
+    lote: int,
+    proveedores: list[str] | None,
+) -> dict:
+    """NER sobre el corpus, por lotes, con aviso de progreso y ritmo."""
+    backend = ent.cargar_backend(backend_nombre, modelo, dispositivo, lote, proveedores)
     t0 = time.time()
 
-    for i, fragmento in enumerate(fragmentos, start=1):
-        encontradas = ent.menciones_de_fragmento(fragmento, backend)
-        if encontradas:
-            menciones[fragmento["chunk_id"]] = encontradas
-        if i % 2000 == 0:
-            ritmo = i / max(time.time() - t0, 1e-9)
-            restante = (len(fragmentos) - i) / max(ritmo, 1e-9) / 60
-            print(f"  {i:,}/{len(fragmentos):,}  {ritmo:.0f}/s  faltan ~{restante:.0f} min")
+    def progreso(hechas: int, total: int) -> None:
+        transcurrido = max(time.time() - t0, 1e-9)
+        ritmo = hechas / transcurrido
+        restante = (total - hechas) / max(ritmo, 1e-9) / 60
+        print(
+            f"  ventanas {hechas:,}/{total:,}  {ritmo:.0f}/s  faltan ~{restante:.1f} min",
+            flush=True,
+        )
+
+    menciones = ent.reconocer_corpus(fragmentos, backend, lote, progreso)
+
+    desalineadas = getattr(backend, "desalineadas", 0)
+    if desalineadas:
+        # No es fatal —esas menciones se descartan— pero si el número es grande, el
+        # modelo está devolviendo offsets en otra unidad y conviene mirarlo antes
+        # de fiarse de la evidencia de las tripletas.
+        print(f"  aviso: {desalineadas:,} menciones descartadas por offsets que no cuadran")
 
     print(f"NER en {(time.time() - t0) / 60:.1f} min")
     return menciones
 
 
-def extraer_relaciones(fragmentos: list[dict], menciones: dict, clave_a_id: dict) -> list:
+def _oraciones_de(tarea: tuple[str, str]) -> list[str]:
+    """Segmenta un fragmento. A nivel de módulo porque tiene que ser picklable."""
+    texto, idioma = tarea
+    return dividir_en_oraciones(texto, idioma)
+
+
+def extraer_relaciones(
+    fragmentos: list[dict],
+    menciones: dict,
+    clave_a_id: dict,
+    procesos: int = 1,
+) -> list:
+    """Las tripletas del corpus.
+
+    **La segmentación va en paralelo y la extracción no.** Emparejar menciones
+    contra los patrones es un puñado de regex ya compiladas sobre huecos de menos
+    de 60 caracteres: no se nota. Lo que cuesta es `dividir_en_oraciones`, que es
+    pysbd y que sobre 64.484 fragmentos es una segunda pasada de decenas de
+    minutos —`chunking.py` documenta 321 s para un solo CSV—. Quedaba escondida
+    detrás de las 15 horas del NER; con el NER en minutos, era lo siguiente.
+    """
+    candidatos = [
+        f for f in fragmentos
+        if len(menciones.get(f["chunk_id"]) or ()) >= 2
+    ]
+    if not candidatos:
+        return []
+
+    tareas = [(f["texto"], f.get("idioma") or "es") for f in candidatos]
+    if procesos > 1 and len(candidatos) > procesos:
+        with ProcessPoolExecutor(max_workers=procesos) as pool:
+            segmentados = list(pool.map(_oraciones_de, tareas, chunksize=64))
+    else:
+        segmentados = [_oraciones_de(t) for t in tareas]
+
     tripletas: list[rel.Tripleta] = []
-    for fragmento in fragmentos:
-        del_fragmento = menciones.get(fragmento["chunk_id"])
-        if not del_fragmento or len(del_fragmento) < 2:
-            continue
-        texto = fragmento["texto"]
-        oraciones = dividir_en_oraciones(texto, fragmento.get("idioma") or "es")
-        tripletas.extend(rel.extraer(texto, del_fragmento, oraciones, clave_a_id))
+    for fragmento, oraciones in zip(candidatos, segmentados):
+        tripletas.extend(
+            rel.extraer(
+                fragmento["texto"],
+                menciones[fragmento["chunk_id"]],
+                oraciones,
+                clave_a_id,
+            )
+        )
     return tripletas
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ner", default="onnx", choices=("onnx", "falso"))
+    ap.add_argument("--ner", default="gliner2", choices=("gliner2", "onnx", "falso"))
     ap.add_argument("--modelo", help="repositorio del modelo de NER, si no el de por defecto")
+    ap.add_argument(
+        "--dispositivo",
+        default="cuda",
+        help="dónde corre el NER del backend gliner2: cuda, cpu, cuda:1…",
+    )
+    ap.add_argument(
+        "--lote",
+        type=int,
+        default=32,
+        help="ventanas por lote de inferencia. Subirlo satura mejor la GPU; "
+        "bajarlo es lo primero que hay que probar ante un out of memory",
+    )
+    ap.add_argument(
+        "--proveedor",
+        action="append",
+        help="ejecutor de ONNX Runtime para --ner onnx (repetible). Sin esto la "
+        "sesión abre en CPU y la GPU no se toca: DmlExecutionProvider en la "
+        "Radeon, CUDAExecutionProvider en NVIDIA con onnxruntime-gpu",
+    )
+    ap.add_argument(
+        "--procesos",
+        type=int,
+        default=max(1, (os.cpu_count() or 4) - 1),
+        help="procesos para segmentar en oraciones al extraer relaciones",
+    )
     ap.add_argument("--limite", type=int, help="usa solo los primeros N fragmentos")
     ap.add_argument("--rehacer-ner", action="store_true", help="ignora trabajo/entidades.jsonl")
     ap.add_argument(
@@ -131,21 +216,46 @@ def main() -> int:
     if cache.exists() and not args.rehacer_ner:
         menciones = ent.leer_cache(cache)
         print(f"entidades en caché ({cache.name}): {len(menciones):,} fragmentos")
+
+        # Una caché dejada por una corrida con `--limite` cubre una parte del
+        # corpus, y sin este aviso el grafo saldría construido sobre esa parte sin
+        # que nada fallara: el archivo se escribe, la etapa devuelve 0 y solo los
+        # conteos del resumen —que nadie mira contra el corpus— lo delatarían. Es
+        # el mismo silencio que la ventana de poda vacía, y merece el mismo trato.
+        cubiertos = sum(1 for f in fragmentos if f["chunk_id"] in menciones)
+        if cubiertos < len(fragmentos) // 2:
+            print(
+                f"  AVISO: la caché solo cubre {cubiertos:,} de los {len(fragmentos):,} "
+                f"fragmentos leídos. Parece de una corrida con --limite.\n"
+                f"  Rehazla con --rehacer-ner o el grafo saldrá construido sobre "
+                f"esa fracción."
+            )
     else:
         try:
-            menciones = reconocer(fragmentos, args.ner, args.modelo)
-        except ImportError:
+            menciones = reconocer(
+                fragmentos,
+                args.ner,
+                args.modelo,
+                args.dispositivo,
+                args.lote,
+                args.proveedor,
+            )
+        except (ImportError, OSError) as error:
             # No se devuelve error a propósito. Esta etapa corre dentro del
             # pipeline y el grafo es el componente **bonus**: tumbar aquí la
             # corrida se llevaría por delante `05_empaquetar` y `06_verificar`,
             # que es la que comprueba lo único eliminatorio del reto. Es el mismo
             # trato que `05_empaquetar` da al PDF del informe: avisar fuerte y
             # seguir.
+            #
+            # `OSError` además del `ImportError`: un modelo que no se puede
+            # descargar —repositorio inexistente, Hub caído, sin red— llega por
+            # ahí, y era el hueco por el que esta etapa sí tumbaba la corrida
+            # justo en el caso que este bloque decía cubrir.
             print()
-            print("  PENDIENTE: falta el backend de NER, no hay grafo (§7, bonus).")
+            print(f"  PENDIENTE: no hay NER disponible, no hay grafo (§7, bonus).")
+            print(f"  Causa: {type(error).__name__}: {error}")
             print("  Instálalo con:  uv sync --extra grafo")
-            print("  o córrelo aislado:")
-            print("      uv run --isolated --with gliner2-onnx python scripts/etapas/04_grafo.py")
             print("  El resto de la entrega no depende de esto.")
             return 0
         ent.escribir_cache(menciones, cache)
@@ -172,8 +282,9 @@ def main() -> int:
     admitidas = construccion.entidades_admitidas(entidades, n_documentos)
     print(f"entidades: {len(entidades):,} -> {len(admitidas):,} tras podar")
 
-    tripletas = extraer_relaciones(fragmentos, menciones, clave_a_id)
-    print(f"tripletas: {len(tripletas):,}")
+    t0 = time.time()
+    tripletas = extraer_relaciones(fragmentos, menciones, clave_a_id, args.procesos)
+    print(f"tripletas: {len(tripletas):,}  ({(time.time() - t0) / 60:.1f} min)")
 
     grafo = construccion.construir(
         fragmentos, menciones, admitidas, clave_a_id, tripletas

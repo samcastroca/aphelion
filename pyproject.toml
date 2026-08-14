@@ -50,16 +50,24 @@ amd = ["onnx>=1.20", "onnxruntime-directml>=1.24"]
 # construye la entrega.
 #     uv sync --extra grafo
 #
-# `gliner2-onnx` y no `gliner`: el segundo declara `transformers<5.14.0` y este
-# proyecto tiene fijado `>=5.14.1`, así que uv rechaza la resolución — el mismo
-# choque que ya dejó fuera a `optimum`. El primero pide `transformers>=4.40` sin
-# tope, no arrastra torch y corre sobre el mismo ONNX Runtime que usa la Radeon.
-# Licencias: el paquete es MIT y el modelo (`fastino/gliner2-multi-v1`, con su
-# export ONNX) Apache-2.0, que es lo que pide la §4.3.
+# `gliner2[local]` es el paquete oficial de Fastino y es el que usa el backend por
+# defecto: coloca el modelo en la GPU e infiere por lotes. `gliner2-onnx` no hace
+# ninguna de las dos cosas —solo `extract_entities(text, labels)`, y con la sesión
+# en CPU salvo que se le pase el proveedor—, que es de donde salían las 15 horas
+# de la primera versión de esta etapa; se conserva porque es el único camino a
+# DirectML en la Radeon.
+#
+# El conflicto que dejó fuera a `gliner` v1 —declara `transformers<5.14.0` contra
+# el `>=5.14.1` de este proyecto, el mismo choque que ya excluyó a `optimum`— no
+# aplica a `gliner2`: pide `torch` y `transformers` sin tope de versión.
+#
+# Licencias: los paquetes son MIT/Apache-2.0 y el modelo
+# (`fastino/gliner2-multi-v1`, con su export ONNX) Apache-2.0, que es lo que pide
+# la §4.3.
 #
 # networkx llega igualmente como dependencia de torch, pero aquí se importa
 # directo —`aphelion.grafo.construccion`— y una dependencia que se usa se declara.
-grafo = ["gliner2-onnx>=0.1.1", "networkx>=3.0"]
+grafo = ["gliner2[local]>=1.3.2", "gliner2-onnx>=0.1.1", "networkx>=3.0"]
 
 # Codificación por GPU en NVIDIA. Las ruedas de PyPI para Windows son solo CPU,
 # así que la build con CUDA hay que pedirla al índice de PyTorch.
