@@ -115,20 +115,34 @@ try {
     # horas y solo se nota al final, que es exactamente como llegamos aqui.
     if ($Ner -eq "gliner2") {
         Paso "PyTorch ve la GPU"
-        $sonda = 'import torch; print("TORCH", torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "-")'
-        $linea = @(& uv run @extras python -c $sonda) | Where-Object { $_ -like "TORCH *" } | Select-Object -First 1
+        # Dos detalles que ya mordieron:
+        #
+        # Comillas simples en el lado de Python, porque las dobles dentro de un
+        # argumento que va a un ejecutable nativo se escapan distinto en
+        # PowerShell 5.1 y en 7, y la sonda llegaria partida en una de las dos.
+        #
+        # Y los campos separados por barra, no por espacio: el nombre de la GPU
+        # los lleva dentro ("NVIDIA GeForce RTX 5060"), asi que partir por
+        # espacios desplaza las posiciones y la comprobacion acaba comparando
+        # "NVIDIA" con "True" -- abortando por falta de GPU en la maquina que si
+        # la tiene.
+        $sonda = "import torch; hay = torch.cuda.is_available(); print('TORCH|' + torch.__version__ + '|' + str(hay) + '|' + (torch.cuda.get_device_name(0) if hay else '-'))"
+        $linea = @(& uv run @extras python -c $sonda) | Where-Object { $_ -like "TORCH|*" } | Select-Object -First 1
         if ($LASTEXITCODE -ne 0 -or -not $linea) { throw "no pude interrogar a torch" }
 
-        Write-Host "  $linea"
-        $campos = $linea -split "\s+"
-        if ($campos[3] -ne "True") {
+        $campos = $linea -split "\|"
+        Write-Host "  torch $($campos[1])   cuda disponible: $($campos[2])"
+        if ($campos[2] -ne "True") {
             Mal "torch no ve la GPU: la corrida seria en CPU y son horas."
             Mal "Si la version no acaba en +cu130, el extra no se aplico:"
             Mal "    uv sync --extra cuda --extra grafo"
-            Mal "y recuerda que todo `uv run` necesita esos mismos --extra."
+            # Comillas simples: el backtick es el caracter de escape de PowerShell,
+            # y 'uv' entre backticks dentro de comillas dobles se lee como la
+            # secuencia Unicode `u -- error de parseo en PowerShell 7.
+            Mal 'y recuerda que cada uv run necesita esos mismos --extra.'
             throw "sin GPU no tiene sentido medir"
         }
-        Bien "$($campos[4])"
+        Bien "$($campos[3])"
 
         # --- Descarga del modelo ------------------------------------------
         # Aparte de la medicion: son ~800 MB la primera vez y falsearian el reloj.
