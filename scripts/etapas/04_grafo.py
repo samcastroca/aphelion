@@ -53,6 +53,16 @@ from aphelion import config
 from aphelion.grafo import construccion, entidades as ent, relaciones as rel
 from aphelion.indice.chunking import dividir_en_oraciones
 
+# `gliner2` imprime emojis al cargar («🧠 Model Configuration») y no se le puede
+# callar. Con la salida canalizada —que es como corre bajo medir_grafo.ps1 y el
+# pipeline—, Python en Windows escribe con la página de códigos del sistema
+# (cp1252), que no tiene emojis: UnicodeEncodeError antes de la primera
+# inferencia. La salida de esta etapa es informativa, no un artefacto, así que
+# UTF-8 con `errors="replace"` es estrictamente mejor que reventar.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def ruta_fragmentos() -> Path:
     """De dónde salen los fragmentos.

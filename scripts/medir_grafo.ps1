@@ -52,6 +52,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Los hijos de Python escriben aqui a traves de tuberias (Out-Null, Tee-Object),
+# y bajo tuberia Python usa la pagina de codigos del sistema (cp1252) en vez de
+# la consola: el emoji que gliner2 imprime al cargar su configuracion revienta
+# con UnicodeEncodeError antes de la primera inferencia. UTF-8 en los hijos.
+$env:PYTHONUTF8 = "1"
+
 function Paso($texto)  { Write-Host "`n=== $texto ===" -ForegroundColor Cyan }
 function Bien($texto)  { Write-Host "  $texto" -ForegroundColor Green }
 function Aviso($texto) { Write-Host "  $texto" -ForegroundColor Yellow }
