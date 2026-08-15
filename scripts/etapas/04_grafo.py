@@ -113,6 +113,12 @@ def reconocer(
 ) -> dict:
     """NER sobre el corpus, por lotes, con aviso de progreso y ritmo."""
     backend = ent.cargar_backend(backend_nombre, modelo, dispositivo, lote, proveedores)
+    # La atestación de dispositivo: qué motor quedó dónde, dicho por el backend y
+    # no por la petición. Si esta línea dice `cpu` o `CPUExecutionProvider`, la
+    # corrida va a tardar horas y es aquí donde hay que parar a mirar.
+    donde = getattr(backend, "donde", None)
+    if donde:
+        print(f"  NER en {donde}", flush=True)
     t0 = time.time()
 
     def progreso(hechas: int, total: int) -> None:

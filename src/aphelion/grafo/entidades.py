@@ -235,6 +235,16 @@ class NerGliner2:
         from gliner2 import GLiNER2  # dependencia opcional
 
         self.modelo = GLiNER2.from_pretrained(modelo, map_location=dispositivo)
+        # Dónde quedaron los parámetros de verdad, no dónde se pidió que quedaran.
+        # Las 15 horas de la primera versión fueron una corrida en CPU que nada
+        # delató: cada backend declara aquí su dispositivo y `04_grafo` lo imprime,
+        # para que la propia corrida lo atestigüe en vez de deducirlo del reloj.
+        import torch
+
+        d = next(self.modelo.parameters()).device
+        self.donde = (
+            f"{d} ({torch.cuda.get_device_name(d)})" if d.type == "cuda" else str(d)
+        )
         self.dispositivo = dispositivo
         self.lote = lote
         self.etiquetas = list(TIPOS.values())
@@ -325,6 +335,11 @@ class NerOnnx:
             modelo or self.MODELO,
             providers=proveedores or ["CPUExecutionProvider"],
         )
+        # Los proveedores con que la sesión abrió de verdad. ONNX Runtime descarta
+        # sin error los que no pueda cargar —pedir DmlExecutionProvider sin la DLL
+        # deja la sesión en CPU y nada lo dice—, así que se le pregunta a la sesión
+        # y no a la petición.
+        self.donde = ", ".join(self.runtime.encoder.get_providers())
         self.etiquetas = list(TIPOS.values())
         self.tipo_de = {v: k for k, v in TIPOS.items()}
 
